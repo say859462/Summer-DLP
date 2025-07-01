@@ -1,10 +1,10 @@
 # Summer-_NYCU_2025_DLP  
 This is the repository of summer nycu DLP course  
    
-Environment:  
-    OS:Windows 11  
-    GPU: RTX5070 TI  
-    Module:  
+#Environment:  
+    ##OS:Windows 11  
+    ##GPU: RTX5070 TI  
+    ##Module:  
         filelock==3.13.1  
         fsspec==2024.6.1  
         Jinja2==3.1.4  
