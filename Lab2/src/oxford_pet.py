@@ -28,6 +28,7 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         )  # images_directory = root/images
         self.masks_directory = os.path.join(self.root, "annotations", "trimaps")
         print(self.images_directory)
+        print(self.masks_directory)
         self.filenames = self._read_split()  # read train/valid/test splits
 
     def __len__(self):
@@ -60,6 +61,8 @@ class OxfordPetDataset(torch.utils.data.Dataset):
     def _read_split(self):
         split_filename = "test.txt" if self.mode == "test" else "trainval.txt"
         split_filepath = os.path.join(self.root, "annotations", split_filename)
+
+        print(split_filepath)
         with open(split_filepath) as f:
             split_data = f.read().strip("\n").split("\n")
         filenames = [x.split(" ")[0] for x in split_data]
@@ -93,7 +96,6 @@ class SimpleOxfordPetDataset(OxfordPetDataset):
     def __getitem__(self, *args, **kwargs):
 
         sample = super().__getitem__(*args, **kwargs)
-
         # resize images
         image = np.array(
             Image.fromarray(sample["image"]).resize((256, 256), Image.BILINEAR)
@@ -148,12 +150,12 @@ def extract_archive(filepath):
 
 def load_dataset(data_path, mode):
     # implement the load dataset function here
-    dataset = SimpleOxfordPetDataset(data_path, mode=mode)
-    dataset.download()
-    assert False, "Not implemented yet!"
+
+    # OxfordPetDataset.download(data_path)
+    # dataset = SimpleOxfordPetDataset(data_path, mode=mode)
+
+    return SimpleOxfordPetDataset(data_path, mode="train")
 
 
-load_dataset(
-    "dataset",
-    "train",
-)
+if __name__ == "__main__":
+    data = load_dataset("dataset\oxford-iiit-pet", mode="train")
