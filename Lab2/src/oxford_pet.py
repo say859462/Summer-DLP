@@ -10,16 +10,24 @@ from urllib.request import urlretrieve
 
 class OxfordPetDataset(torch.utils.data.Dataset):
     def __init__(self, root, mode="train", transform=None):
+        """_summary_
 
+        Args:
+            root (_type_): Dataset location
+            mode (str, optional): Training or Validation Set, Defaults to "train".
+            transform (_type_, optional): Applying data transform(augmentation) for dataset, Defaults to None.
+        """
         assert mode in {"train", "valid", "test"}
 
         self.root = root
         self.mode = mode
         self.transform = transform
 
-        self.images_directory = os.path.join(self.root, "images")
+        self.images_directory = os.path.join(
+            self.root, "images"
+        )  # images_directory = root/images
         self.masks_directory = os.path.join(self.root, "annotations", "trimaps")
-
+        print(self.images_directory)
         self.filenames = self._read_split()  # read train/valid/test splits
 
     def __len__(self):
@@ -115,6 +123,8 @@ class TqdmUpTo(tqdm):
 def download_url(url, filepath):
     directory = os.path.dirname(os.path.abspath(filepath))
     os.makedirs(directory, exist_ok=True)
+
+    # If we already downloaded the dataset , we should not download it again
     if os.path.exists(filepath):
         return
 
@@ -138,5 +148,12 @@ def extract_archive(filepath):
 
 def load_dataset(data_path, mode):
     # implement the load dataset function here
-
+    dataset = SimpleOxfordPetDataset(data_path, mode=mode)
+    dataset.download()
     assert False, "Not implemented yet!"
+
+
+load_dataset(
+    "dataset",
+    "train",
+)
