@@ -9,6 +9,7 @@ from urllib.request import urlretrieve
 
 
 class OxfordPetDataset(torch.utils.data.Dataset):
+
     def __init__(self, root, mode="train", transform=None):
         """_summary_
 
@@ -24,11 +25,14 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         self.transform = transform
 
         self.images_directory = os.path.join(
-            self.root, "images"
-        )  # images_directory = root/images
-        self.masks_directory = os.path.join(self.root, "annotations", "trimaps")
-        print(self.images_directory)
-        print(self.masks_directory)
+            self.root, "images")  # images_directory = root/images
+        self.masks_directory = os.path.join(self.root, "annotations",
+                                            "trimaps")
+        # Check whether the dataset is exists , otherwise,we should download the dataset first
+        if not os.path.exists(self.images_directory) or not os.path.exists(
+                self.masks_directory):
+            self.download(root)
+
         self.filenames = self._read_split()  # read train/valid/test splits
 
     def __len__(self):
@@ -62,7 +66,6 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         split_filename = "test.txt" if self.mode == "test" else "trainval.txt"
         split_filepath = os.path.join(self.root, "annotations", split_filename)
 
-        print(split_filepath)
         with open(split_filepath) as f:
             split_data = f.read().strip("\n").split("\n")
         filenames = [x.split(" ")[0] for x in split_data]
@@ -86,26 +89,27 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         # load annotations
         filepath = os.path.join(root, "annotations.tar.gz")
         download_url(
-            url="https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz",
+            url=
+            "https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz",
             filepath=filepath,
         )
         extract_archive(filepath)
 
 
 class SimpleOxfordPetDataset(OxfordPetDataset):
+
     def __getitem__(self, *args, **kwargs):
 
         sample = super().__getitem__(*args, **kwargs)
         # resize images
         image = np.array(
-            Image.fromarray(sample["image"]).resize((256, 256), Image.BILINEAR)
-        )
+            Image.fromarray(sample["image"]).resize((256, 256),
+                                                    Image.BILINEAR))
         mask = np.array(
-            Image.fromarray(sample["mask"]).resize((256, 256), Image.NEAREST)
-        )
+            Image.fromarray(sample["mask"]).resize((256, 256), Image.NEAREST))
         trimap = np.array(
-            Image.fromarray(sample["trimap"]).resize((256, 256), Image.NEAREST)
-        )
+            Image.fromarray(sample["trimap"]).resize((256, 256),
+                                                     Image.NEAREST))
 
         # convert to other format HWC -> CHW
         sample["image"] = np.moveaxis(image, -1, 0)
@@ -116,6 +120,7 @@ class SimpleOxfordPetDataset(OxfordPetDataset):
 
 
 class TqdmUpTo(tqdm):
+
     def update_to(self, b=1, bsize=1, tsize=None):
         if tsize is not None:
             self.total = tsize
@@ -131,11 +136,11 @@ def download_url(url, filepath):
         return
 
     with TqdmUpTo(
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-        miniters=1,
-        desc=os.path.basename(filepath),
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            miniters=1,
+            desc=os.path.basename(filepath),
     ) as t:
         urlretrieve(url, filename=filepath, reporthook=t.update_to, data=None)
         t.total = t.n
@@ -148,14 +153,12 @@ def extract_archive(filepath):
         shutil.unpack_archive(filepath, extract_dir)
 
 
-def load_dataset(data_path, mode):
+def load_dataset(data_path, mode, tranform=None):
     # implement the load dataset function here
 
-    # OxfordPetDataset.download(data_path)
-    # dataset = SimpleOxfordPetDataset(data_path, mode=mode)
-
-    return SimpleOxfordPetDataset(data_path, mode="train")
+    return SimpleOxfordPetDataset(data_path, mode=mode, transform=tranform)
 
 
+# For local develope purpose
 if __name__ == "__main__":
     data = load_dataset("dataset\oxford-iiit-pet", mode="train")
