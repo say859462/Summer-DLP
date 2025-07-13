@@ -1,11 +1,11 @@
 import os
-import torch
 import shutil
-import numpy as np
+from urllib.request import urlretrieve
 
+import numpy as np
+import torch
 from PIL import Image
 from tqdm import tqdm
-from urllib.request import urlretrieve
 
 
 class OxfordPetDataset(torch.utils.data.Dataset):
@@ -25,12 +25,13 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         self.transform = transform
 
         self.images_directory = os.path.join(
-            self.root, "images")  # images_directory = root/images
-        self.masks_directory = os.path.join(self.root, "annotations",
-                                            "trimaps")
+            self.root, "images"
+        )  # images_directory = root/images
+        self.masks_directory = os.path.join(self.root, "annotations", "trimaps")
         # Check whether the dataset is exists , otherwise,we should download the dataset first
         if not os.path.exists(self.images_directory) or not os.path.exists(
-                self.masks_directory):
+            self.masks_directory
+        ):
             self.download(root)
 
         self.filenames = self._read_split()  # read train/valid/test splits
@@ -58,8 +59,10 @@ class OxfordPetDataset(torch.utils.data.Dataset):
     @staticmethod
     def _preprocess_mask(mask):
         mask = mask.astype(np.float32)
-        mask[mask == 2.0] = 0.0
-        mask[(mask == 1.0) | (mask == 3.0)] = 1.0
+        mask[mask == 1.0] = 1.0
+        
+        # We treat border as background 
+        mask[(mask == 2.0) | (mask == 3.0)] = 0.0
         return mask
 
     def _read_split(self):
@@ -89,8 +92,7 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         # load annotations
         filepath = os.path.join(root, "annotations.tar.gz")
         download_url(
-            url=
-            "https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz",
+            url="https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz",
             filepath=filepath,
         )
         extract_archive(filepath)
@@ -103,17 +105,18 @@ class SimpleOxfordPetDataset(OxfordPetDataset):
         sample = super().__getitem__(*args, **kwargs)
         # resize images
         image = np.array(
-            Image.fromarray(sample["image"]).resize((256, 256),
-                                                    Image.BILINEAR))
+            Image.fromarray(sample["image"]).resize((256, 256), Image.BILINEAR)
+        )
         mask = np.array(
-            Image.fromarray(sample["mask"]).resize((256, 256), Image.NEAREST))
+            Image.fromarray(sample["mask"]).resize((256, 256), Image.NEAREST)
+        )
         trimap = np.array(
-            Image.fromarray(sample["trimap"]).resize((256, 256),
-                                                     Image.NEAREST))
+            Image.fromarray(sample["trimap"]).resize((256, 256), Image.NEAREST)
+        )
 
         # convert to other format HWC -> CHW
-        sample["image"] = np.moveaxis(image, -1, 0)
-        sample["mask"] = np.expand_dims(mask, 0)
+        sample["image"] = torch.from_numpy(np.moveaxis(image, -1, 0)).float()
+        sample["mask"] = torch.from_numpy(np.expand_dims(mask, 0)).float()
         sample["trimap"] = np.expand_dims(trimap, 0)
 
         return sample
@@ -136,11 +139,11 @@ def download_url(url, filepath):
         return
 
     with TqdmUpTo(
-            unit="B",
-            unit_scale=True,
-            unit_divisor=1024,
-            miniters=1,
-            desc=os.path.basename(filepath),
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        miniters=1,
+        desc=os.path.basename(filepath),
     ) as t:
         urlretrieve(url, filename=filepath, reporthook=t.update_to, data=None)
         t.total = t.n
@@ -159,6 +162,6 @@ def load_dataset(data_path, mode, tranform=None):
     return SimpleOxfordPetDataset(data_path, mode=mode, transform=tranform)
 
 
-# For local develope purpose
+# For local-develope purpose
 if __name__ == "__main__":
     data = load_dataset("dataset\oxford-iiit-pet", mode="train")

@@ -1,6 +1,7 @@
 # Implement your UNet model here
 import torch
 from torch import nn
+
 """_summary_
 
     The contracting block of UNet.
@@ -25,14 +26,13 @@ class DoubleConv(nn.Module):
 
         # We add padding here for the purpose of concating data
         self.doubleConv = nn.Sequential(
-            nn.Conv2d(input_channels,
-                      output_channels,
-                      kernel_size=3,
-                      padding=1), nn.ReLU(inplace=True),
-            nn.Conv2d(output_channels,
-                      output_channels,
-                      kernel_size=3,
-                      padding=1), nn.ReLU(inplace=True))
+            nn.Conv2d(input_channels, output_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(output_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(output_channels, output_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(output_channels),
+            nn.ReLU(inplace=True),
+        )
 
     def forward(self, x):
         return self.doubleConv(x)
@@ -70,10 +70,9 @@ class Unet_Expansive_Block(nn.Module):
 
         self.doubleConv = DoubleConv(input_channels, output_channels)
         # Set stride = 2 to double the size of input
-        self.upConv2d = nn.ConvTranspose2d(input_channels,
-                                           output_channels,
-                                           kernel_size=2,
-                                           stride=2)
+        self.upConv2d = nn.ConvTranspose2d(
+            input_channels, output_channels, kernel_size=2, stride=2
+        )
 
     def forward(self, x, skip):
         # Data size (batch, channels, heights, widths)
@@ -85,10 +84,7 @@ class Unet_Expansive_Block(nn.Module):
 
 class Unet(nn.Module):
 
-    def __init__(self,
-                 input_channels,
-                 output_classes,
-                 channels=[64, 128, 256, 512]):
+    def __init__(self, input_channels, output_classes, channels=[64, 128, 256, 512]):
         """_summary_
 
         Args:
@@ -110,22 +106,21 @@ class Unet(nn.Module):
         for channel in channels:
 
             self.contracting_blocks.append(
-                Unet_Contracting_Block(contracting_block_input_channels,
-                                       channel))
+                Unet_Contracting_Block(contracting_block_input_channels, channel)
+            )
 
             contracting_block_input_channels = channel
 
         self.bottom = DoubleConv(channels[-1], channels[-1] * 2)
 
         for channel in reversed(channels):
-            self.expansive_blocks.append(
-                Unet_Expansive_Block(channel * 2, channel))
+            self.expansive_blocks.append(Unet_Expansive_Block(channel * 2, channel))
 
         # In binary segmentation , the output should be the probability of foreground and background
         # So we applied sigmoid function at last
         self.output = nn.Sequential(
-            nn.Conv2d(channels[0], output_classes, kernel_size=1),
-            nn.Sigmoid())
+            nn.Conv2d(channels[0], output_classes, kernel_size=1), nn.Sigmoid()
+        )
 
     def forward(self, x):
 
