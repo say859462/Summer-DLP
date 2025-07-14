@@ -8,7 +8,7 @@ import numpy as np
 def evaluate(model, valid_dataloader, device):
 
     # data : Validation data loader
-
+    
     val_loss = []
     val_dice_scores = []
     criterion = nn.BCELoss()

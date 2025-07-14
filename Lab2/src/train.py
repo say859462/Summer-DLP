@@ -10,8 +10,6 @@ from utils import dice_score
 from evaluate import evaluate
 import albumentations as A
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 
 # Data augmentation
 # Include rotation,and adjustment of brightness, contrast , saturation, hue
@@ -59,8 +57,7 @@ def show_result(train_loss, train_dice_score, val_loss, val_dice_score):
     plt.close()
 
 
-def train(args):
-    # implement the training function here
+def train(args, device):
 
     train_loss = []
     train_dice_score = []
@@ -70,14 +67,22 @@ def train(args):
 
     train_data = load_dataset(args.data_path, "train", transform=train_transform())
     valid_data = load_dataset(args.data_path, "valid")
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+    train_dataloader = DataLoader(
+        train_data,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+    )
     valid_dataloader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False)
-    model = Unet(3, 1).to(device)
+
+    model = Unet(3, 1).to(device=device)
 
     # We choose Binary Cross Entropy due to the output of model (foreground and background)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     model.train()
+
     for epoch in range(args.epochs):
 
         train_loss_sum = 0
@@ -87,7 +92,9 @@ def train(args):
             optimizer.zero_grad()
 
             # -------------------- Training Phase Begin--------------------
-            image, mask = sample["image"].to(device), sample["mask"].to(device)
+            image, mask = sample["image"].to(device=device), sample["mask"].to(
+                device=device
+            )
 
             pred_mask = model(image)
             dice = dice_score(pred_mask, mask)
@@ -144,7 +151,7 @@ def get_args():
     parser.add_argument(
         "--epochs", "-e", type=int, default=100, help="number of epochs"
     )
-    parser.add_argument("--batch_size", "-b", type=int, default=32, help="batch size")
+    parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
         "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"
     )
@@ -153,5 +160,8 @@ def get_args():
 
 
 if __name__ == "__main__":
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     args = get_args()
-    train(args)
+
+    train(args, device)

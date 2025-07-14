@@ -117,8 +117,8 @@ class SimpleOxfordPetDataset(OxfordPetDataset):
         )
 
         # convert to other format HWC -> CHW
-        sample["image"] = torch.from_numpy(np.moveaxis(image, -1, 0)).float()
-        sample["mask"] = torch.from_numpy(np.expand_dims(mask, 0)).float()
+        sample["image"] = np.moveaxis(image, -1, 0).astype(np.float32)
+        sample["mask"] = np.expand_dims(mask, 0).astype(np.float32)
         sample["trimap"] = np.expand_dims(trimap, 0)
 
         return sample
@@ -174,7 +174,6 @@ if __name__ == "__main__":
         return A.Compose(
             [
                 A.HorizontalFlip(p=0.5),
-                A.VerticalFlip(p=0.5),
                 A.RandomRotate90(p=0.5),
                 A.ColorJitter(
                     brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, p=0.5
