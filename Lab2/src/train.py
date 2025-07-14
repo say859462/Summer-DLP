@@ -9,6 +9,7 @@ import numpy as np
 from utils import dice_score
 from evaluate import evaluate
 import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 
 # Data augmentation
@@ -16,36 +17,79 @@ import albumentations as A
 def train_transform():
     return A.Compose(
         [
+            A.Resize(256, 256),
             A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.RandomRotate90(p=0.5),
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, p=0.5),
+            A.ColorJitter(
+                brightness=[0.7, 1.2],
+                contrast=[0.8, 1.2],
+                saturation=[0.8, 1.2],
+                hue=[-0.5, 0.5],
+                p=0.5,
+            ),
+            A.RandomResizedCrop(size=(256, 256), scale=(0.8, 1), p=0.5),
         ]
     )
 
 
 # Plot the result
-def show_result(train_loss, train_dice_score, val_loss, val_dice_score):
+def show_result(train_loss, train_dice_score, val_loss, val_dice_score, model_name):
     import matplotlib.pyplot as plt
+
+    min_train_loss = min(train_loss)
+    min_val_loss = min(val_loss)
+    max_train_dice = max(train_dice_score)
+    max_val_dice = max(val_dice_score)
 
     # Loss Curve
     plt.figure(figsize=(10, 5))
-    plt.plot(train_loss, label="Train Loss", color="blue", marker="o")
-    plt.plot(val_loss, label="Validation Loss", color="orange", marker="o")
+    plt.plot(train_loss, label="Train Loss (min: {min_train_loss:.4f})", color="blue")
+    plt.plot(
+        val_loss, label="Validation Loss (min: {min_val_loss:.4f})", color="orange"
+    )
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Training & Validation Loss")
     plt.legend()
     plt.grid(True)
 
+    # Mark the lowest loss point
+    plt.scatter(
+        train_loss.index(min_train_loss), min_train_loss, color="blue", s=100, zorder=5
+    )
+    plt.scatter(
+        val_loss.index(min_val_loss), min_val_loss, color="orange", s=100, zorder=5
+    )
+
     # Save loss curve
-    plt.savefig("loss_curve.png", bbox_inches="tight", dpi=300)
+    plt.savefig(model_name + "loss_curve.png", bbox_inches="tight", dpi=300)
     plt.close()
 
     # Dice Score curve
     plt.figure(figsize=(10, 5))
-    plt.plot(train_dice_score, label="Train Dice", color="blue", marker="o")
-    plt.plot(val_dice_score, label="Validation Dice", color="orange", marker="o")
+    plt.plot(
+        train_dice_score, label="Train Dice (max: {max_train_dice:.4f})", color="blue"
+    )
+    plt.plot(
+        val_dice_score,
+        label="Validation Dice (max: {max_val_dice:.4f})",
+        color="orange",
+    )
+
+    # Mark the highest dice score point
+    plt.scatter(
+        train_dice_score.index(max_train_dice),
+        max_train_dice,
+        color="blue",
+        s=100,
+        zorder=5,
+    )
+    plt.scatter(
+        val_dice_score.index(max_val_dice),
+        max_val_dice,
+        color="orange",
+        s=100,
+        zorder=5,
+    )
     plt.xlabel("Epoch")
     plt.ylabel("Dice Score")
     plt.title("Training & Validation Dice Score")
@@ -53,12 +97,12 @@ def show_result(train_loss, train_dice_score, val_loss, val_dice_score):
     plt.grid(True)
 
     # Save dice score curve
-    plt.savefig("dice_curve.png", bbox_inches="tight", dpi=300)
+    plt.savefig(model_name + "dice_curve.png", bbox_inches="tight", dpi=300)
     plt.close()
 
 
 def train(args, device):
-
+    assert args.model in {"Unet", "ResNet34_Unet"}
     train_loss = []
     train_dice_score = []
     val_loss = []
@@ -81,6 +125,8 @@ def train(args, device):
     # We choose Binary Cross Entropy due to the output of model (foreground and background)
     criterion = nn.BCELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    early_stop = 5
+    cnt = 0
     model.train()
 
     for epoch in range(args.epochs):
@@ -131,16 +177,29 @@ def train(args, device):
         # Save model
         if val_dice_score_value > best_dice_score:
             best_dice_score = val_dice_score_value
+            # TODO : Save model according to the selected model
+            torch.save(model.state_dict(), "saved_models/{}.pth".format(args.model))
+        else:
+            cnt += 1
 
-            torch.save(model.state_dict(), f"saved_models/Unet.pth")
-
+        # Early stop to avoid overfitting
+        if cnt >= early_stop:
+            break
     # -------------------- Draw Loss and Dice Curve --------------------
-    show_result(train_loss, train_dice_score, val_loss, val_dice_score)
+    # TODO : send model name as parameter to save pic
+    show_result(train_loss, train_dice_score, val_loss, val_dice_score, args.model)
+
+    # TODO : save the loss,and dice_score array for data analyzing
+    # 將指標轉為 NumPy 陣列並保存
+    np.save(f"saved_metrics/{args.model}_train_loss.npy", np.array(train_loss))
+    np.save(f"saved_metrics/{args.model}_train_dice.npy", np.array(train_dice_score))
+    np.save(f"saved_metrics/{args.model}_val_loss.npy", np.array(val_loss))
+    np.save(f"saved_metrics/{args.model}_val_dice.npy", np.array(val_dice_score))
 
 
 def get_args():
     parser = argparse.ArgumentParser(
-        description="Train the UNet on images and target masks"
+        description="Train the Model on images and target masks"
     )
     parser.add_argument(
         "--data_path",
@@ -149,9 +208,12 @@ def get_args():
         help="path of the input data",
     )
     parser.add_argument(
-        "--epochs", "-e", type=int, default=100, help="number of epochs"
+        "--model", type=str, default="Unet", help="The model for tranining"
     )
-    parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
+    parser.add_argument(
+        "--epochs", "-e", type=int, default=400, help="number of epochs"
+    )
+    parser.add_argument("--batch_size", "-b", type=int, default=8, help="batch size")
     parser.add_argument(
         "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"
     )
