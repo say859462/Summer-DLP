@@ -51,7 +51,9 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         mask = self._preprocess_mask(trimap)
 
         sample = dict(image=image, mask=mask, trimap=trimap)
-        if self.transform is not None:
+
+        # We transform the data only on training data
+        if self.transform is not None and self.mode == "train":
             sample = self.transform(**sample)
 
         return sample
@@ -59,10 +61,10 @@ class OxfordPetDataset(torch.utils.data.Dataset):
     @staticmethod
     def _preprocess_mask(mask):
         mask = mask.astype(np.float32)
-        mask[mask == 1.0] = 1.0
-        
-        # We treat border as background 
-        mask[(mask == 2.0) | (mask == 3.0)] = 0.0
+        mask[mask == 2.0] = 0.0
+
+        # We treat border as foreground
+        mask[(mask == 1.0) | (mask == 3.0)] = 1.0
         return mask
 
     def _read_split(self):
@@ -156,12 +158,30 @@ def extract_archive(filepath):
         shutil.unpack_archive(filepath, extract_dir)
 
 
-def load_dataset(data_path, mode, tranform=None):
-    # implement the load dataset function here
+import albumentations as A
 
-    return SimpleOxfordPetDataset(data_path, mode=mode, transform=tranform)
+
+def load_dataset(data_path="dataset\oxford-iiit-pet", mode="train", transform=None):
+
+    return SimpleOxfordPetDataset(data_path, mode=mode, transform=transform)
 
 
 # For local-develope purpose
 if __name__ == "__main__":
-    data = load_dataset("dataset\oxford-iiit-pet", mode="train")
+    # Data augmentation
+    # Include rotation,and adjustment of brightness, contrast , saturation, hue=
+    def train_transform():
+        return A.Compose(
+            [
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
+                A.RandomRotate90(p=0.5),
+                A.ColorJitter(
+                    brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, p=0.5
+                ),
+            ]
+        )
+
+    data = load_dataset(
+        "dataset\oxford-iiit-pet", mode="train", transform=train_transform()
+    )

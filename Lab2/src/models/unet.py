@@ -47,17 +47,14 @@ class Unet_Contracting_Block(nn.Module):
 
         self.output_channels = output_channels
 
-        # The output of contracting_block should be remained for the purpose of passing through expandsive path
-        self.skip = None
-
         self.doubleConv = DoubleConv(input_channels, output_channels)
         self.maxPool2d = nn.MaxPool2d(kernel_size=2, stride=2)
 
     def forward(self, x):
         x = self.doubleConv(x)
-        self.skip = x
+        skip = x
         x = self.maxPool2d(x)
-        return x
+        return x, skip
 
 
 class Unet_Expansive_Block(nn.Module):
@@ -123,16 +120,17 @@ class Unet(nn.Module):
         )
 
     def forward(self, x):
-
+        skips = []
         # Apply the contracting path
         for block in self.contracting_blocks:
-            x = block(x)
+            x, skip = block(x)
+            skips.append(skip)
 
         x = self.bottom(x)
 
         # Apply the expansiveve path
         for i, block in enumerate(self.expansive_blocks):
-            skip_feature = self.contracting_blocks[-(i + 1)].skip
+            skip_feature = skips[-(i + 1)]
             x = block(x, skip_feature)
 
         x = self.output(x)

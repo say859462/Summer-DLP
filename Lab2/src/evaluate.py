@@ -12,9 +12,9 @@ def evaluate(model, valid_dataloader, device):
     val_loss = []
     val_dice_scores = []
     criterion = nn.BCELoss()
-
+    model.eval()
     with torch.no_grad():
-        model.eval()
+        
         for data in valid_dataloader:
             image = data["image"].to(device)
             mask = data["mask"].to(device)
