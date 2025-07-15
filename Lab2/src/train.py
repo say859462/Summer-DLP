@@ -20,7 +20,11 @@ def train_transform():
         [
             A.Resize(256, 256),
             A.HorizontalFlip(p=0.5),
-            A.Rotate((-15, 15), p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.ShiftScaleRotate(
+                shift_limit=0.2, scale_limit=0.2, rotate_limit=30, p=0.5
+            ),
+            A.Blur(blur_limit=7, p=0.5),
             A.ColorJitter(
                 brightness=[0.7, 1.2],
                 contrast=[0.8, 1.2],
