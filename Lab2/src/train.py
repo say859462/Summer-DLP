@@ -1,7 +1,6 @@
 import argparse
 from oxford_pet import load_dataset
 from torch.utils.data import DataLoader
-from models.unet import Unet
 import torch
 from torch import nn
 from tqdm import tqdm
@@ -10,20 +9,23 @@ from utils import dice_score
 from evaluate import evaluate
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import os
+from models.resnet34_unet import ResNet34_UNet
+from models.unet import Unet
 
 
 # Data augmentation
-# Include rotation,and adjustment of brightness, contrast , saturation, hue
 def train_transform():
     return A.Compose(
         [
             A.Resize(256, 256),
             A.HorizontalFlip(p=0.5),
+            A.Rotate((-15, 15), p=0.5),
             A.ColorJitter(
                 brightness=[0.7, 1.2],
                 contrast=[0.8, 1.2],
                 saturation=[0.8, 1.2],
-                hue=[-0.5, 0.5],
+                hue=[-0.2, 0.2],
                 p=0.5,
             ),
             A.RandomResizedCrop(size=(256, 256), scale=(0.8, 1), p=0.5),
@@ -42,9 +44,15 @@ def show_result(train_loss, train_dice_score, val_loss, val_dice_score, model_na
 
     # Loss Curve
     plt.figure(figsize=(10, 5))
-    plt.plot(train_loss, label="Train Loss (min: {min_train_loss:.4f})", color="blue")
     plt.plot(
-        val_loss, label="Validation Loss (min: {min_val_loss:.4f})", color="orange"
+        train_loss,
+        label="Train Loss (min: {:.4f})".format(min_train_loss),
+        color="blue",
+    )
+    plt.plot(
+        val_loss,
+        label="Validation Loss (min: {:.4f})".format(min_val_loss),
+        color="orange",
     )
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
@@ -61,17 +69,19 @@ def show_result(train_loss, train_dice_score, val_loss, val_dice_score, model_na
     )
 
     # Save loss curve
-    plt.savefig(model_name + "loss_curve.png", bbox_inches="tight", dpi=300)
+    plt.savefig(model_name + "_loss_curve.png", bbox_inches="tight", dpi=300)
     plt.close()
 
     # Dice Score curve
     plt.figure(figsize=(10, 5))
     plt.plot(
-        train_dice_score, label="Train Dice (max: {max_train_dice:.4f})", color="blue"
+        train_dice_score,
+        label="Train Dice (max: {:.4f})".format(max_train_dice),
+        color="blue",
     )
     plt.plot(
         val_dice_score,
-        label="Validation Dice (max: {max_val_dice:.4f})",
+        label="Validation Dice (max: {:.4f})".format(max_val_dice),
         color="orange",
     )
 
@@ -97,11 +107,16 @@ def show_result(train_loss, train_dice_score, val_loss, val_dice_score, model_na
     plt.grid(True)
 
     # Save dice score curve
-    plt.savefig(model_name + "dice_curve.png", bbox_inches="tight", dpi=300)
+    plt.savefig(model_name + "_dice_curve.png", bbox_inches="tight", dpi=300)
     plt.close()
 
 
-def train(args, device):
+def train(args, device, model):
+    tqdm.write(
+        "Training model {}, epoch {}, batch_size {}, learning_rate {}".format(
+            args.model, args.epochs, args.batch_size, args.learning_rate
+        )
+    )
     assert args.model in {"Unet", "ResNet34_Unet"}
     train_loss = []
     train_dice_score = []
@@ -120,13 +135,13 @@ def train(args, device):
     )
     valid_dataloader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False)
 
-    model = Unet(3, 1).to(device=device)
-
     # We choose Binary Cross Entropy due to the output of model (foreground and background)
     criterion = nn.BCELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    early_stop = 5
-    cnt = 0
+    # Weight_decay to avoid overfitting
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=args.learning_rate, weight_decay=1e-4
+    )
+
     model.train()
 
     for epoch in range(args.epochs):
@@ -177,20 +192,15 @@ def train(args, device):
         # Save model
         if val_dice_score_value > best_dice_score:
             best_dice_score = val_dice_score_value
-            # TODO : Save model according to the selected model
             torch.save(model.state_dict(), "saved_models/{}.pth".format(args.model))
-        else:
-            cnt += 1
 
-        # Early stop to avoid overfitting
-        if cnt >= early_stop:
-            break
     # -------------------- Draw Loss and Dice Curve --------------------
-    # TODO : send model name as parameter to save pic
+
     show_result(train_loss, train_dice_score, val_loss, val_dice_score, args.model)
 
-    # TODO : save the loss,and dice_score array for data analyzing
-    # 將指標轉為 NumPy 陣列並保存
+    if not os.path.exists("saved_metrics"):
+        os.mkdir("saved_metrics")
+    # Store loss and dice_score array for analyzing purpose
     np.save(f"saved_metrics/{args.model}_train_loss.npy", np.array(train_loss))
     np.save(f"saved_metrics/{args.model}_train_dice.npy", np.array(train_dice_score))
     np.save(f"saved_metrics/{args.model}_val_loss.npy", np.array(val_loss))
@@ -198,6 +208,7 @@ def train(args, device):
 
 
 def get_args():
+    # python src/train.py --model ResNet34_Unet --epochs 100 --batch_size 8 -lr 1e-4
     parser = argparse.ArgumentParser(
         description="Train the Model on images and target masks"
     )
@@ -208,12 +219,16 @@ def get_args():
         help="path of the input data",
     )
     parser.add_argument(
-        "--model", type=str, default="Unet", help="The model for tranining"
+        "--model",
+        "-m",
+        type=str,
+        default="Unet",
+        help="The model for tranining, Unet or ResNet34_Unet",
     )
     parser.add_argument(
         "--epochs", "-e", type=int, default=400, help="number of epochs"
     )
-    parser.add_argument("--batch_size", "-b", type=int, default=8, help="batch size")
+    parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
         "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"
     )
@@ -225,5 +240,10 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     args = get_args()
+    model = None
+    if args.model == "Unet":
+        model = Unet(3, 1).to(device=device)
+    else:
+        model = ResNet34_UNet(3, 1).to(device=device)
 
-    train(args, device)
+    train(args, device, model)

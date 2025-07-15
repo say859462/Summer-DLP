@@ -4,3 +4,5 @@ Summer_NYCU_2025_DLP_Lab2/
 dataset/
 saved_models/
 __pycache__
+saved_metrics/
+outputs_imgs/

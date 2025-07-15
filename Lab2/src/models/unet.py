@@ -26,10 +26,14 @@ class DoubleConv(nn.Module):
 
         # We add padding here for the purpose of concating data
         self.doubleConv = nn.Sequential(
-            nn.Conv2d(input_channels, output_channels, kernel_size=3, padding=1),
+            nn.Conv2d(
+                input_channels, output_channels, kernel_size=3, padding=1, bias=False
+            ),
             nn.BatchNorm2d(output_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(output_channels, output_channels, kernel_size=3, padding=1),
+            nn.Conv2d(
+                output_channels, output_channels, kernel_size=3, padding=1, bias=False
+            ),
             nn.BatchNorm2d(output_channels),
             nn.ReLU(inplace=True),
         )
@@ -48,6 +52,8 @@ class Unet_Contracting_Block(nn.Module):
         self.output_channels = output_channels
 
         self.doubleConv = DoubleConv(input_channels, output_channels)
+
+        # output_size = floor((input_size - kernel_size)/stride) +1
         self.maxPool2d = nn.MaxPool2d(kernel_size=2, stride=2)
 
     def forward(self, x):
@@ -66,6 +72,7 @@ class Unet_Expansive_Block(nn.Module):
         self.output_channels = output_channels
 
         self.doubleConv = DoubleConv(input_channels, output_channels)
+
         # Set stride = 2 to double the size of input
         self.upConv2d = nn.ConvTranspose2d(
             input_channels, output_channels, kernel_size=2, stride=2

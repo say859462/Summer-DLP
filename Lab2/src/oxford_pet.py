@@ -63,7 +63,6 @@ class OxfordPetDataset(torch.utils.data.Dataset):
         mask = mask.astype(np.float32)
         mask[mask == 2.0] = 0.0
 
-        # We treat border as foreground
         mask[(mask == 1.0) | (mask == 3.0)] = 1.0
         return mask
 
