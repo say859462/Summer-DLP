@@ -1,17 +1,19 @@
 import argparse
-from oxford_pet import load_dataset
-from torch.utils.data import DataLoader
+import os
+
+import albumentations as A
+import numpy as np
 import torch
 from torch import nn
+from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader
 from tqdm import tqdm
-import numpy as np
-from utils import dice_score
+
 from evaluate import evaluate
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-import os
 from models.resnet34_unet import ResNet34_UNet
 from models.unet import Unet
+from oxford_pet import load_dataset
+from utils import dice_score
 
 
 # Data augmentation
@@ -20,16 +22,21 @@ def train_transform():
         [
             A.Resize(256, 256),
             A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.5),
-            A.ShiftScaleRotate(
-                shift_limit=0.2, scale_limit=0.2, rotate_limit=30, p=0.5
+            A.VerticalFlip(p=0.2),
+            A.Affine(
+                translate_percent=0.2,
+                scale=(0.8, 1.2),
+                rotate=(-30, 30),
+                shear=(-10, 10),
+                p=0.5,
             ),
-            A.Blur(blur_limit=7, p=0.5),
-            A.ColorJitter(
-                brightness=[0.7, 1.2],
-                contrast=[0.8, 1.2],
-                saturation=[0.8, 1.2],
-                hue=[-0.2, 0.2],
+            A.Blur(blur_limit=3, p=0.5),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
+            A.RandomBrightnessContrast(p=0.5),
+            A.HueSaturationValue(
+                hue_shift_limit=(-20, 20),  
+                sat_shift_limit=(-30, 30), 
+                val_shift_limit=(-20, 20), 
                 p=0.5,
             ),
             A.RandomResizedCrop(size=(256, 256), scale=(0.8, 1), p=0.5),
@@ -143,7 +150,7 @@ def train(args, device, model):
     criterion = nn.BCELoss()
     # Weight_decay to avoid overfitting
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.learning_rate, weight_decay=1e-4
+        model.parameters(), lr=args.learning_rate, weight_decay=1e-5
     )
 
     model.train()
@@ -229,9 +236,7 @@ def get_args():
         default="Unet",
         help="The model for tranining, Unet or ResNet34_Unet",
     )
-    parser.add_argument(
-        "--epochs", "-e", type=int, default=400, help="number of epochs"
-    )
+    parser.add_argument("--epochs", "-e", type=int, default=50, help="number of epochs")
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
         "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"

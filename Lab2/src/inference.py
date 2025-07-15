@@ -1,16 +1,18 @@
 import argparse
-import torch
-from oxford_pet import load_dataset
-from torch.utils.data import DataLoader
-from models.unet import Unet
-from models.resnet34_unet import ResNet34_UNet
-from tqdm import tqdm
-import numpy as np
-from utils import dice_score
-from torch import nn
 import os
-from train import train
+
+import numpy as np
+import torch
 from PIL import Image
+from torch import nn
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from models.resnet34_unet import ResNet34_UNet
+from models.unet import Unet
+from oxford_pet import load_dataset
+from train import train
+from utils import dice_score
 
 
 def inference(args, device, model):
