@@ -44,7 +44,7 @@ def inference(args, device, model):
 
             binary_mask = (pred_mask > 0.5).astype(np.uint8)
 
-            np_image = (image.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).astype(
+            np_image = (image.squeeze(0).permute(1, 2, 0).cpu().numpy()).astype(
                 np.uint8
             )
             pil_image = Image.fromarray(np_image).convert("RGBA")
@@ -89,7 +89,7 @@ def get_args():
         help="The model for tranining, Unet/ResNet34_Unet",
     )
     parser.add_argument(
-        "--epochs", "-e", type=int, default=400, help="number of epochs"
+        "--epochs", "-e", type=int, default=300, help="number of epochs"
     )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(

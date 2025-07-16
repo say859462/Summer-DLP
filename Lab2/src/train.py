@@ -34,9 +34,9 @@ def train_transform():
             A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
             A.RandomBrightnessContrast(p=0.5),
             A.HueSaturationValue(
-                hue_shift_limit=(-20, 20),  
-                sat_shift_limit=(-30, 30), 
-                val_shift_limit=(-20, 20), 
+                hue_shift_limit=(-20, 20),
+                sat_shift_limit=(-30, 30),
+                val_shift_limit=(-20, 20),
                 p=0.5,
             ),
             A.RandomResizedCrop(size=(256, 256), scale=(0.8, 1), p=0.5),
@@ -152,7 +152,9 @@ def train(args, device, model):
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate, weight_decay=1e-5
     )
-
+    scheduler = lr_scheduler.ReduceLROnPlateau(
+        optimizer=optimizer, mode="max", factor=0.5
+    )
     model.train()
 
     for epoch in range(args.epochs):
@@ -197,7 +199,7 @@ def train(args, device, model):
         val_loss_value, val_dice_score_value = evaluate(model, valid_dataloader, device)
         val_loss.append(val_loss_value)
         val_dice_score.append(val_dice_score_value)
-
+        scheduler.step(val_dice_score_value)
         # -------------------- Validating Phase End--------------------
 
         # Save model
@@ -233,13 +235,15 @@ def get_args():
         "--model",
         "-m",
         type=str,
-        default="Unet",
+        default="ResNet34_Unet",
         help="The model for tranining, Unet or ResNet34_Unet",
     )
-    parser.add_argument("--epochs", "-e", type=int, default=50, help="number of epochs")
+    parser.add_argument(
+        "--epochs", "-e", type=int, default=400, help="number of epochs"
+    )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
-        "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"
+        "--learning_rate", "-lr", type=float, default=1e-4, help="learning rate"
     )
 
     return parser.parse_args()

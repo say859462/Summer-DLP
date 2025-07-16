@@ -2,13 +2,15 @@ import torch
 
 
 def dice_score(pred_mask, gt_mask):
-    # Input Size : (Batch, 1, H, W)
-
+    # Input Size of pred_mask and gt_mask : (Batch, 1, H, W)
+    
+    # print(pred_mask.shape)
+    # print(gt_mask.shape)
+    
     # trimaps/ 	Trimap annotations for every image in the dataset
     # Pixel Annotations: 1: Foreground 2:Background 3: Not classified
-    # We should calculate  the dice score based on label 1
+    # We should calculate  the dice score based on label 1 (pixel 1 and pixel 3 are labled as 1)
 
-    batch_size = pred_mask.size(0)
     smooth = 1e-6  # add smooth value in case of 0 value denominator and nominator
 
     pred_mask = (pred_mask > 0.5).float()
