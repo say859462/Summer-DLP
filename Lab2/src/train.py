@@ -239,7 +239,7 @@ def get_args():
         help="The model for tranining, Unet or ResNet34_Unet",
     )
     parser.add_argument(
-        "--epochs", "-e", type=int, default=400, help="number of epochs"
+        "--epochs", "-e", type=int, default=300, help="number of epochs"
     )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
