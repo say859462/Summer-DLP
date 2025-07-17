@@ -8,13 +8,13 @@ import numpy as np
 def evaluate(model, valid_dataloader, device):
 
     # data : Validation data loader
-    
+
     val_loss = []
     val_dice_scores = []
     criterion = nn.BCELoss()
     model.eval()
     with torch.no_grad():
-        
+
         for data in valid_dataloader:
             image = data["image"].to(device)
             mask = data["mask"].to(device)

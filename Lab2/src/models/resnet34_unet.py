@@ -162,9 +162,9 @@ class ResNet34_UNet(nn.Module):
 
         downsample = None
 
-        # Short
+        
         if stride != 1:
-            # Increasing the number of channel without lossing the shape of shortcut
+            # Increasing the number of channel and halve the size of input data
             downsample = nn.Sequential(
                 nn.Conv2d(in_channel, out_channel, kernel_size=1, stride=stride),
                 nn.BatchNorm2d(out_channel),

@@ -15,11 +15,17 @@ from train import train
 from utils import dice_score
 
 
+def set_seed(seed=1):
+    np.random.seed(seed)  # NumPy random
+    torch.manual_seed(seed)  # PyTorch CPU
+    torch.cuda.manual_seed(seed)  # PyTorch GPU
+
+
 def inference(args, device, model):
 
     assert args.model in {"Unet", "ResNet34_Unet"}
     tqdm.write("Testing model {}".format(args.model))
-    test_data = load_dataset(args.data_path, mode="test", transform=None)
+    test_data = load_dataset(args.data_path, mode="test")
     test_dataloader = DataLoader(test_data, batch_size=1, shuffle=False)
 
     test_loss = []
@@ -68,8 +74,8 @@ def inference(args, device, model):
     if not os.path.exists("saved_metrics"):
         os.mkdir("saved_metrics")
     # Store loss and dice_score array for analyzing purpose
-    np.save(f"saved_metrics/{args.model}_train_loss.npy", np.array(test_loss))
-    np.save(f"saved_metrics/{args.model}_train_dice.npy", np.array(test_dice_scores))
+    np.save(f"saved_metrics/{args.model}_test_loss.npy", np.array(test_loss))
+    np.save(f"saved_metrics/{args.model}_test_dice.npy", np.array(test_dice_scores))
 
 
 def get_args():
@@ -85,21 +91,23 @@ def get_args():
         "--model",
         "-m",
         type=str,
-        default="Unet",
+        default="ResNet34_Unet",
         help="The model for tranining, Unet/ResNet34_Unet",
     )
     parser.add_argument(
-        "--epochs", "-e", type=int, default=300, help="number of epochs"
+        "--epochs", "-e", type=int, default=200, help="number of epochs"
     )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
-        "--learning_rate", "-lr", type=float, default=1e-4, help="learning rate"
+        "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = get_args()
+    # Setting random seed for reproducibility
+    set_seed()
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model = None
 
