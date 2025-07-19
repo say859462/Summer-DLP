@@ -1,4 +1,4 @@
-from utils import dice_score
+from utils import dice_score, dice_loss
 import torch
 from torch import nn
 from tqdm import tqdm
@@ -11,7 +11,7 @@ def evaluate(model, valid_dataloader, device):
 
     val_loss = []
     val_dice_scores = []
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     model.eval()
     with torch.no_grad():
 
@@ -19,7 +19,9 @@ def evaluate(model, valid_dataloader, device):
             image = data["image"].to(device)
             mask = data["mask"].to(device)
             pred_mask = model(image)
-            val_loss.append(criterion(pred_mask, mask).item())
+            loss = criterion(pred_mask, mask) + dice_loss(pred_mask, mask)
+
+            val_loss.append(loss.item())
             val_dice_scores.append(dice_score(pred_mask, mask).item())
 
         tqdm.write(

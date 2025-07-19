@@ -5,47 +5,79 @@ import albumentations as A
 import numpy as np
 import torch
 from torch import nn
-from torch.optim import lr_scheduler
+from torch.optim.lr_scheduler import (
+    ReduceLROnPlateau,
+    CosineAnnealingLR,
+    LinearLR,
+    SequentialLR,
+    StepLR,
+)
+
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import cv2
 from evaluate import evaluate
 from models.resnet34_unet import ResNet34_UNet
 from models.unet import Unet
 from oxford_pet import load_dataset
-from utils import dice_score
+from utils import dice_score, dice_loss
 
 
 # Data augmentation
+# additional_targets indicate that what kind of data should apply image augmentation and what should not
+# e.g : image data apply blur is available but mask data should not
+
+# CLANE : edge enhancement , benefit to learn edge of foreground
+
+
+# Parameters of GridDistortion,ElasticTransform,CLAHE are provided by ChatGPT
 def train_transform():
     return A.Compose(
         [
             A.Resize(256, 256),
             A.HorizontalFlip(p=0.5),
-            A.VerticalFlip(p=0.2),
-            A.Affine(
-                translate_percent=0.2,
-                scale=(0.8, 1.2),
-                rotate=(-30, 30),
-                shear=(-10, 10),
+            A.OneOf(
+                [
+                    A.RandomCrop(256, 256),
+                    A.Affine(
+                        translate_percent=0.2,
+                        scale=(0.7, 1.3),
+                        rotate=(-45, 45),
+                        shear=(-5, 5),
+                        p=0.5,
+                    ),
+                ],
                 p=0.5,
             ),
-            A.Blur(blur_limit=3, p=0.5),
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
-            A.RandomBrightnessContrast(p=0.5),
+            A.Blur(blur_limit=3, p=0.3),
             A.HueSaturationValue(
-                hue_shift_limit=(-20, 20),
-                sat_shift_limit=(-30, 30),
-                val_shift_limit=(-20, 20),
+                hue_shift_limit=20, sat_shift_limit=20, val_shift_limit=10, p=0.5
+            ),
+            A.OneOf(
+                [
+                    A.ElasticTransform(alpha=1, sigma=50),
+                    A.GridDistortion(num_steps=5, distort_limit=0.3),
+                    A.CoarseDropout(
+                        num_holes_range=[1, 2],
+                        hole_height_range=[0.1, 0.2],
+                        hole_width_range=[0.1, 0.2],
+                        fill=0,
+                    ),
+                ],
                 p=0.5,
             ),
-            A.RandomResizedCrop(size=(256, 256), scale=(0.8, 1), p=0.5),
-        ]
+            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.5),
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
+        ],
+        additional_targets={"mask": "mask"},
     )
 
 
 # Plot the result
-def show_result(train_loss, train_dice_score, val_loss, val_dice_score, model_name):
+def show_result(
+    train_loss, train_dice_score, val_loss, val_dice_score, model_name, lr_history=None
+):
     import matplotlib.pyplot as plt
 
     min_train_loss = min(train_loss)
@@ -121,6 +153,17 @@ def show_result(train_loss, train_dice_score, val_loss, val_dice_score, model_na
     plt.savefig(model_name + "_dice_curve.png", bbox_inches="tight", dpi=300)
     plt.close()
 
+    # Learning Rate Curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(lr_history, label="Learning Rate", color="green")
+    plt.xlabel("Epoch")
+    plt.ylabel("Learning Rate")
+    plt.title("Learning Rate Schedule")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(model_name + "_lr_curve.png", bbox_inches="tight", dpi=300)
+    plt.close()
+
 
 def train(args, device, model):
     tqdm.write(
@@ -129,6 +172,7 @@ def train(args, device, model):
         )
     )
     assert args.model in {"Unet", "ResNet34_Unet"}
+    lr_history = []
     train_loss = []
     train_dice_score = []
     val_loss = []
@@ -144,17 +188,43 @@ def train(args, device, model):
         num_workers=4,
         pin_memory=True,
     )
-    valid_dataloader = DataLoader(valid_data, batch_size=args.batch_size, shuffle=False)
+    valid_dataloader = DataLoader(
+        valid_data,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+    )
 
-    # We choose Binary Cross Entropy due to the output of model (foreground and background)
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
+
     # Weight_decay to avoid overfitting
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.learning_rate, weight_decay=1e-5
+        model.parameters(), lr=args.learning_rate, weight_decay=5e-4
     )
-    scheduler = lr_scheduler.ReduceLROnPlateau(
-        optimizer=optimizer, mode="max", factor=0.5
+
+    # scheduler = ReduceLROnPlateau(
+    #     optimizer=optimizer, mode="max", patience=10, factor=0.5
+    # )
+
+    # Warm-up: Growing learning rate linearly start from 1% of learning rate
+    warmup_epochs = 10
+    cosine_epochs = args.epochs - warmup_epochs
+
+    linear_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs)
+
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer=optimizer, eta_min=args.learning_rate * 0.1, T_max=cosine_epochs
     )
+
+    # scheduler = StepLR(optimizer, step_size=30, gamma=0.5)
+
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[linear_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
+    )
+
     model.train()
 
     for epoch in range(args.epochs):
@@ -171,12 +241,12 @@ def train(args, device, model):
             )
 
             pred_mask = model(image)
-            dice = dice_score(pred_mask, mask)
-            loss = criterion(pred_mask, mask)
+            dice_score_value = dice_score(pred_mask, mask).item()
 
+            loss = criterion(pred_mask, mask) + dice_loss(pred_mask, mask)
             # loss.item() return the loss value
             train_loss_sum += loss.item()
-            train_dice_score_sum += dice.item()
+            train_dice_score_sum += dice_score_value
 
             loss.backward()
             optimizer.step()
@@ -199,7 +269,8 @@ def train(args, device, model):
         val_loss_value, val_dice_score_value = evaluate(model, valid_dataloader, device)
         val_loss.append(val_loss_value)
         val_dice_score.append(val_dice_score_value)
-        scheduler.step(val_dice_score_value)
+        scheduler.step()
+        lr_history.append(scheduler.get_last_lr()[0])
         # -------------------- Validating Phase End--------------------
 
         # Save model
@@ -209,7 +280,9 @@ def train(args, device, model):
 
     # -------------------- Draw Loss and Dice Curve --------------------
 
-    show_result(train_loss, train_dice_score, val_loss, val_dice_score, args.model)
+    show_result(
+        train_loss, train_dice_score, val_loss, val_dice_score, args.model, lr_history
+    )
 
     if not os.path.exists("saved_metrics"):
         os.mkdir("saved_metrics")
@@ -239,7 +312,7 @@ def get_args():
         help="The model for tranining, Unet or ResNet34_Unet",
     )
     parser.add_argument(
-        "--epochs", "-e", type=int, default=300, help="number of epochs"
+        "--epochs", "-e", type=int, default=200, help="number of epochs"
     )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(

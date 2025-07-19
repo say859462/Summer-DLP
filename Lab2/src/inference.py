@@ -12,13 +12,7 @@ from models.resnet34_unet import ResNet34_UNet
 from models.unet import Unet
 from oxford_pet import load_dataset
 from train import train
-from utils import dice_score
-
-
-def set_seed(seed=1):
-    np.random.seed(seed)  # NumPy random
-    torch.manual_seed(seed)  # PyTorch CPU
-    torch.cuda.manual_seed(seed)  # PyTorch GPU
+from utils import dice_score, dice_loss
 
 
 def inference(args, device, model):
@@ -31,7 +25,7 @@ def inference(args, device, model):
     test_loss = []
     test_dice_scores = []
 
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     model.eval()
     cnt = 1
     with torch.no_grad():
@@ -41,11 +35,13 @@ def inference(args, device, model):
             mask = data["mask"].to(device)
 
             pred_mask = model(image)
+            loss = criterion(pred_mask, mask) + dice_loss(pred_mask, mask)
+            test_loss.append(loss.item())
 
-            test_loss.append(criterion(pred_mask, mask).item())
             test_dice_scores.append(dice_score(pred_mask, mask).item())
 
             # ----------Store result image Begin----------
+
             pred_mask = pred_mask.squeeze(0).squeeze(0).cpu().numpy()
 
             binary_mask = (pred_mask > 0.5).astype(np.uint8)
@@ -95,11 +91,11 @@ def get_args():
         help="The model for tranining, Unet/ResNet34_Unet",
     )
     parser.add_argument(
-        "--epochs", "-e", type=int, default=200, help="number of epochs"
+        "--epochs", "-e", type=int, default=400, help="number of epochs"
     )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
-        "--learning_rate", "-lr", type=float, default=1e-3, help="learning rate"
+        "--learning_rate", "-lr", type=float, default=3e-4, help="learning rate"
     )
     return parser.parse_args()
 
@@ -107,7 +103,6 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     # Setting random seed for reproducibility
-    set_seed()
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model = None
 
