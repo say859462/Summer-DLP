@@ -11,7 +11,7 @@ def evaluate(model, valid_dataloader, device):
 
     val_loss = []
     val_dice_scores = []
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCELoss()
     model.eval()
     with torch.no_grad():
 
@@ -19,7 +19,7 @@ def evaluate(model, valid_dataloader, device):
             image = data["image"].to(device)
             mask = data["mask"].to(device)
             pred_mask = model(image)
-            loss = criterion(pred_mask, mask) + dice_loss(pred_mask, mask)
+            loss = 0.5 * criterion(pred_mask, mask) + 1.5 * dice_loss(pred_mask, mask)
 
             val_loss.append(loss.item())
             val_dice_scores.append(dice_score(pred_mask, mask).item())

@@ -31,32 +31,19 @@ from utils import dice_score, dice_loss
 # CLANE : edge enhancement , benefit to learn edge of foreground
 
 
-# Parameters of GridDistortion,ElasticTransform,CLAHE are provided by ChatGPT
+
 def train_transform():
     return A.Compose(
         [
-            A.Resize(256, 256),
+            A.RandomResizedCrop(
+                size=[256, 256], scale=[0.8, 1.0], ratio=[0.75, 1.33], p=1.0
+            ),
             A.HorizontalFlip(p=0.5),
-            A.OneOf(
-                [
-                    A.RandomCrop(256, 256),
-                    A.Affine(
-                        translate_percent=0.2,
-                        scale=(0.7, 1.3),
-                        rotate=(-45, 45),
-                        shear=(-5, 5),
-                        p=0.5,
-                    ),
-                ],
-                p=0.5,
-            ),
-            A.Blur(blur_limit=3, p=0.3),
             A.HueSaturationValue(
-                hue_shift_limit=20, sat_shift_limit=20, val_shift_limit=10, p=0.5
+                hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5
             ),
             A.OneOf(
                 [
-                    A.ElasticTransform(alpha=1, sigma=50),
                     A.GridDistortion(num_steps=5, distort_limit=0.3),
                     A.CoarseDropout(
                         num_holes_range=[1, 2],
@@ -64,10 +51,22 @@ def train_transform():
                         hole_width_range=[0.1, 0.2],
                         fill=0,
                     ),
+                    A.Affine(
+                        translate_percent=0.2,
+                        scale=(0.7, 1.3),
+                        rotate=(-45, 45),
+                        shear=(-5, 5),
+                    ),
                 ],
                 p=0.5,
             ),
-            A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=0.5),
+            A.OneOf(
+                [
+                    A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8)),
+                    A.Blur(blur_limit=3),
+                ],
+                p=0.5,
+            ),
             A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
         ],
         additional_targets={"mask": "mask"},
@@ -196,16 +195,12 @@ def train(args, device, model):
         pin_memory=True,
     )
 
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCELoss()
 
     # Weight_decay to avoid overfitting
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.learning_rate, weight_decay=5e-4
+        model.parameters(), lr=args.learning_rate, weight_decay=3e-5
     )
-
-    # scheduler = ReduceLROnPlateau(
-    #     optimizer=optimizer, mode="max", patience=10, factor=0.5
-    # )
 
     # Warm-up: Growing learning rate linearly start from 1% of learning rate
     warmup_epochs = 10
@@ -216,6 +211,10 @@ def train(args, device, model):
     cosine_scheduler = CosineAnnealingLR(
         optimizer=optimizer, eta_min=args.learning_rate * 0.1, T_max=cosine_epochs
     )
+
+    # scheduler = ReduceLROnPlateau(
+    #     optimizer=optimizer, mode="max", patience=10, factor=0.5
+    # )
 
     # scheduler = StepLR(optimizer, step_size=30, gamma=0.5)
 
@@ -243,7 +242,7 @@ def train(args, device, model):
             pred_mask = model(image)
             dice_score_value = dice_score(pred_mask, mask).item()
 
-            loss = criterion(pred_mask, mask) + dice_loss(pred_mask, mask)
+            loss = 0.5 * criterion(pred_mask, mask) + 1.5 * dice_loss(pred_mask, mask)
             # loss.item() return the loss value
             train_loss_sum += loss.item()
             train_dice_score_sum += dice_score_value

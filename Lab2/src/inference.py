@@ -25,7 +25,7 @@ def inference(args, device, model):
     test_loss = []
     test_dice_scores = []
 
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCELoss()
     model.eval()
     cnt = 1
     with torch.no_grad():
@@ -35,7 +35,7 @@ def inference(args, device, model):
             mask = data["mask"].to(device)
 
             pred_mask = model(image)
-            loss = criterion(pred_mask, mask) + dice_loss(pred_mask, mask)
+            loss = 0.5 * criterion(pred_mask, mask) + 1.5 * dice_loss(pred_mask, mask)
             test_loss.append(loss.item())
 
             test_dice_scores.append(dice_score(pred_mask, mask).item())
@@ -95,7 +95,7 @@ def get_args():
     )
     parser.add_argument("--batch_size", "-b", type=int, default=16, help="batch size")
     parser.add_argument(
-        "--learning_rate", "-lr", type=float, default=3e-4, help="learning rate"
+        "--learning_rate", "-lr", type=float, default=1e-4, help="learning rate"
     )
     return parser.parse_args()
 
