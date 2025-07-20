@@ -45,3 +45,94 @@ def dice_loss(pred_mask, gt_mask):
 
     dice = (2.0 * intersection + smooth) / (union + smooth)
     return 1.0 - dice.mean()
+
+
+# Plot the result
+def show_result(
+    train_loss, train_dice_score, val_loss, val_dice_score, model_name, lr_history=None
+):
+    import matplotlib.pyplot as plt
+
+    min_train_loss = min(train_loss)
+    min_val_loss = min(val_loss)
+    max_train_dice = max(train_dice_score)
+    max_val_dice = max(val_dice_score)
+
+    # Loss Curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(
+        train_loss,
+        label="Train Loss (min: {:.4f})".format(min_train_loss),
+        color="blue",
+    )
+    plt.plot(
+        val_loss,
+        label="Validation Loss (min: {:.4f})".format(min_val_loss),
+        color="orange",
+    )
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training & Validation Loss")
+    plt.legend()
+    plt.grid(True)
+
+    # Mark the lowest loss point
+    plt.scatter(
+        train_loss.index(min_train_loss), min_train_loss, color="blue", s=100, zorder=5
+    )
+    plt.scatter(
+        val_loss.index(min_val_loss), min_val_loss, color="orange", s=100, zorder=5
+    )
+
+    # Save loss curve
+    plt.savefig(model_name + "_loss_curve.png", bbox_inches="tight", dpi=300)
+    plt.close()
+
+    # Dice Score curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(
+        train_dice_score,
+        label="Train Dice (max: {:.4f})".format(max_train_dice),
+        color="blue",
+    )
+    plt.plot(
+        val_dice_score,
+        label="Validation Dice (max: {:.4f})".format(max_val_dice),
+        color="orange",
+    )
+
+    # Mark the highest dice score point
+    plt.scatter(
+        train_dice_score.index(max_train_dice),
+        max_train_dice,
+        color="blue",
+        s=100,
+        zorder=5,
+    )
+    plt.scatter(
+        val_dice_score.index(max_val_dice),
+        max_val_dice,
+        color="orange",
+        s=100,
+        zorder=5,
+    )
+    plt.xlabel("Epoch")
+    plt.ylabel("Dice Score")
+    plt.title("Training & Validation Dice Score")
+    plt.legend()
+    plt.grid(True)
+
+    # Save dice score curve
+    plt.savefig(model_name + "_dice_curve.png", bbox_inches="tight", dpi=300)
+    plt.close()
+
+    # Learning Rate Curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(lr_history, label="Learning Rate", color="green")
+    plt.xlabel("Epoch")
+    plt.ylabel("Learning Rate")
+    plt.title("Learning Rate Schedule")
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(model_name + "_lr_curve.png", bbox_inches="tight", dpi=300)
+    plt.close()

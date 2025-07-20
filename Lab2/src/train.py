@@ -21,146 +21,7 @@ from evaluate import evaluate
 from models.resnet34_unet import ResNet34_UNet
 from models.unet import Unet
 from oxford_pet import load_dataset
-from utils import dice_score, dice_loss
-
-
-# Data augmentation
-# additional_targets indicate that what kind of data should apply image augmentation and what should not
-# e.g : image data apply blur is available but mask data should not
-
-# CLANE : edge enhancement , benefit to learn edge of foreground
-
-
-def train_transform():
-    return A.Compose(
-        [
-            A.RandomResizedCrop(
-                size=[256, 256], scale=[0.8, 1.0], ratio=[0.75, 1.33], p=1.0
-            ),
-            A.HorizontalFlip(p=0.5),
-            A.HueSaturationValue(
-                hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5
-            ),
-            A.OneOf(
-                [
-                    A.GridDistortion(num_steps=5, distort_limit=0.3),
-                    A.CoarseDropout(
-                        num_holes_range=[1, 2],
-                        hole_height_range=[0.1, 0.2],
-                        hole_width_range=[0.1, 0.2],
-                        fill=0,
-                    ),
-                    A.Affine(
-                        translate_percent=0.2,
-                        scale=(0.7, 1.3),
-                        rotate=(-45, 45),
-                        shear=(-5, 5),
-                    ),
-                ],
-                p=0.5,
-            ),
-            A.OneOf(
-                [
-                    A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8)),
-                    A.Blur(blur_limit=3),
-                ],
-                p=0.5,
-            ),
-            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
-        ],
-        additional_targets={"mask": "mask"},
-    )
-
-
-# Plot the result
-def show_result(
-    train_loss, train_dice_score, val_loss, val_dice_score, model_name, lr_history=None
-):
-    import matplotlib.pyplot as plt
-
-    min_train_loss = min(train_loss)
-    min_val_loss = min(val_loss)
-    max_train_dice = max(train_dice_score)
-    max_val_dice = max(val_dice_score)
-
-    # Loss Curve
-    plt.figure(figsize=(10, 5))
-    plt.plot(
-        train_loss,
-        label="Train Loss (min: {:.4f})".format(min_train_loss),
-        color="blue",
-    )
-    plt.plot(
-        val_loss,
-        label="Validation Loss (min: {:.4f})".format(min_val_loss),
-        color="orange",
-    )
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Training & Validation Loss")
-    plt.legend()
-    plt.grid(True)
-
-    # Mark the lowest loss point
-    plt.scatter(
-        train_loss.index(min_train_loss), min_train_loss, color="blue", s=100, zorder=5
-    )
-    plt.scatter(
-        val_loss.index(min_val_loss), min_val_loss, color="orange", s=100, zorder=5
-    )
-
-    # Save loss curve
-    plt.savefig(model_name + "_loss_curve.png", bbox_inches="tight", dpi=300)
-    plt.close()
-
-    # Dice Score curve
-    plt.figure(figsize=(10, 5))
-    plt.plot(
-        train_dice_score,
-        label="Train Dice (max: {:.4f})".format(max_train_dice),
-        color="blue",
-    )
-    plt.plot(
-        val_dice_score,
-        label="Validation Dice (max: {:.4f})".format(max_val_dice),
-        color="orange",
-    )
-
-    # Mark the highest dice score point
-    plt.scatter(
-        train_dice_score.index(max_train_dice),
-        max_train_dice,
-        color="blue",
-        s=100,
-        zorder=5,
-    )
-    plt.scatter(
-        val_dice_score.index(max_val_dice),
-        max_val_dice,
-        color="orange",
-        s=100,
-        zorder=5,
-    )
-    plt.xlabel("Epoch")
-    plt.ylabel("Dice Score")
-    plt.title("Training & Validation Dice Score")
-    plt.legend()
-    plt.grid(True)
-
-    # Save dice score curve
-    plt.savefig(model_name + "_dice_curve.png", bbox_inches="tight", dpi=300)
-    plt.close()
-
-    # Learning Rate Curve
-    plt.figure(figsize=(10, 5))
-    plt.plot(lr_history, label="Learning Rate", color="green")
-    plt.xlabel("Epoch")
-    plt.ylabel("Learning Rate")
-    plt.title("Learning Rate Schedule")
-    plt.grid(True)
-    plt.legend()
-    plt.savefig(model_name + "_lr_curve.png", bbox_inches="tight", dpi=300)
-    plt.close()
+from utils import dice_score, dice_loss, show_result
 
 
 def train(args, device, model):
@@ -177,7 +38,7 @@ def train(args, device, model):
     val_dice_score = []
     best_dice_score = 0.0
 
-    train_data = load_dataset(args.data_path, "train", transform=train_transform())
+    train_data = load_dataset(args.data_path, "train")
     valid_data = load_dataset(args.data_path, "valid")
     train_dataloader = DataLoader(
         train_data,
@@ -199,8 +60,7 @@ def train(args, device, model):
     # Weight_decay to avoid overfitting
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate, weight_decay=3e-5
-    )  
-
+    )
 
     # Warm-up: Growing learning rate linearly start from 1% of learning rate
     warmup_epochs = 10
@@ -211,8 +71,6 @@ def train(args, device, model):
     cosine_scheduler = CosineAnnealingLR(
         optimizer=optimizer, eta_min=args.learning_rate * 0.1, T_max=cosine_epochs
     )
-
-
 
     scheduler = SequentialLR(
         optimizer,

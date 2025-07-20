@@ -160,9 +160,56 @@ def extract_archive(filepath):
 import albumentations as A
 
 
-def load_dataset(data_path="dataset\oxford-iiit-pet", mode="train", transform=None):
+def load_dataset(data_path="dataset\oxford-iiit-pet", mode="train"):
+    # Data augmentation
+    # additional_targets indicate that what kind of data should apply image augmentation and what should not
+    # e.g : image data apply blur is available but mask data should not
 
-    return SimpleOxfordPetDataset(data_path, mode=mode, transform=transform)
+    # CLANE : edge enhancement , benefit to learn edge of foreground
+
+    def train_transform():
+        return A.Compose(
+            [
+                A.RandomResizedCrop(
+                    size=[256, 256], scale=[0.8, 1.0], ratio=[0.75, 1.33], p=1.0
+                ),
+                A.HorizontalFlip(p=0.5),
+                A.HueSaturationValue(
+                    hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5
+                ),
+                A.OneOf(
+                    [
+                        A.GridDistortion(num_steps=5, distort_limit=0.3),
+                        A.CoarseDropout(
+                            num_holes_range=[1, 2],
+                            hole_height_range=[0.1, 0.2],
+                            hole_width_range=[0.1, 0.2],
+                            fill=0,
+                        ),
+                        A.Affine(
+                            translate_percent=0.2,
+                            scale=(0.7, 1.3),
+                            rotate=(-45, 45),
+                            shear=(-5, 5),
+                        ),
+                    ],
+                    p=0.5,
+                ),
+                A.OneOf(
+                    [
+                        A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8)),
+                        A.Blur(blur_limit=3),
+                    ],
+                    p=0.5,
+                ),
+                A.RandomBrightnessContrast(
+                    brightness_limit=0.3, contrast_limit=0.3, p=0.5
+                ),
+            ],
+            additional_targets={"mask": "mask"},
+        )
+
+    return SimpleOxfordPetDataset(data_path, mode=mode, transform=train_transform())
 
 
 # For local-develope purpose
