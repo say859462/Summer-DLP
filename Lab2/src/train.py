@@ -31,7 +31,6 @@ from utils import dice_score, dice_loss
 # CLANE : edge enhancement , benefit to learn edge of foreground
 
 
-
 def train_transform():
     return A.Compose(
         [
@@ -200,7 +199,8 @@ def train(args, device, model):
     # Weight_decay to avoid overfitting
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate, weight_decay=3e-5
-    )
+    )  
+
 
     # Warm-up: Growing learning rate linearly start from 1% of learning rate
     warmup_epochs = 10
@@ -212,11 +212,7 @@ def train(args, device, model):
         optimizer=optimizer, eta_min=args.learning_rate * 0.1, T_max=cosine_epochs
     )
 
-    # scheduler = ReduceLROnPlateau(
-    #     optimizer=optimizer, mode="max", patience=10, factor=0.5
-    # )
 
-    # scheduler = StepLR(optimizer, step_size=30, gamma=0.5)
 
     scheduler = SequentialLR(
         optimizer,
