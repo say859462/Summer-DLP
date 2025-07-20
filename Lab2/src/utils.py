@@ -1,5 +1,7 @@
 import torch
 import torch.nn
+from PIL import Image
+import numpy as np
 
 
 def dice_score(pred_mask, gt_mask):
@@ -136,3 +138,75 @@ def show_result(
     plt.legend()
     plt.savefig(model_name + "_lr_curve.png", bbox_inches="tight", dpi=300)
     plt.close()
+
+
+def show_maskOnimage(pred_mask, image, id, args):
+    pred_mask = pred_mask.squeeze(0).squeeze(0).cpu().numpy()
+
+    binary_mask = (pred_mask > 0.5).astype(np.uint8)
+
+    np_image = (image.squeeze(0).permute(1, 2, 0).cpu().numpy()).astype(np.uint8)
+    pil_image = Image.fromarray(np_image).convert("RGBA")
+
+    np_rgba = np.array(pil_image)
+
+    # lower alpha value of foreground
+    # foreground：alpha=120；background：alpha=255
+    np_rgba[..., 3] = np.where(binary_mask == 1, 120, 255)
+    pil_result = Image.fromarray(np_rgba)
+    pil_result.save(f"outputs_imgs/stack/{args.model}/{id}.png")
+
+
+def show_maskAndPredMask(pred_mask, mask, id, args):
+    pred_mask = pred_mask.squeeze(0).squeeze(0).cpu().numpy()
+    mask = mask.squeeze(0).squeeze(0).cpu().numpy()
+
+    binary_pred_mask = (pred_mask > 0.5).astype(np.uint8)
+    binary_mask = (mask > 0.5).astype(np.uint8)
+
+    # Create RGBA images for true mask and predicted mask
+    height, width = binary_pred_mask.shape
+    rgba_true_mask = np.zeros((height, width, 4), dtype=np.uint8)
+    rgba_pred_mask = np.zeros((height, width, 4), dtype=np.uint8)
+
+    # Assign colors: green for true mask, red for predicted mask
+    rgba_true_mask[..., 1] = np.where(binary_mask == 1, 255, 0)  # Green for true mask
+    rgba_true_mask[..., 3] = np.where(binary_mask == 1, 120, 255)  # Alpha channel
+    rgba_pred_mask[..., 0] = np.where(
+        binary_pred_mask == 1, 255, 0
+    )  # Red for predicted mask
+    rgba_pred_mask[..., 3] = np.where(binary_pred_mask == 1, 120, 255)  # Alpha channel
+
+    # Convert to PIL images
+    pil_true_mask = Image.fromarray(rgba_true_mask)
+    pil_pred_mask = Image.fromarray(rgba_pred_mask)
+
+    # Add titles using PIL
+    from PIL import ImageDraw
+
+    draw_true = ImageDraw.Draw(pil_true_mask)
+    draw_pred = ImageDraw.Draw(pil_pred_mask)
+    title_true = "True Mask"
+    title_pred = "Predicted Mask"
+    draw_true.text(
+        (10, 10), title_true, fill=(0, 255, 0, 255)
+    )  # Green text for true mask
+    draw_pred.text(
+        (10, 10), title_pred, fill=(255, 0, 0, 255)
+    )  # Red text for predicted mask
+
+    # Combine images side by side
+    combined_width = width * 2
+    combined_height = height
+    combined_image = Image.new("RGBA", (combined_width, combined_height))
+    combined_image.paste(pil_true_mask, (0, 0))
+    combined_image.paste(pil_pred_mask, (width, 0))
+
+    # Add overall title to the combined image
+    draw_combined = ImageDraw.Draw(combined_image)
+    draw_combined.text(
+        (10, 10), "True Mask | Predicted Mask", fill=(255, 255, 255, 255)
+    )
+
+    # Save the combined image
+    combined_image.save(f"outputs_imgs/combined/{args.model}/combined_mask_{id}.png")

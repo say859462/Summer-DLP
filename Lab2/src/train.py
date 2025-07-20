@@ -40,6 +40,7 @@ def train(args, device, model):
 
     train_data = load_dataset(args.data_path, "train")
     valid_data = load_dataset(args.data_path, "valid")
+    
     train_dataloader = DataLoader(
         train_data,
         batch_size=args.batch_size,
@@ -133,17 +134,17 @@ def train(args, device, model):
 
     # -------------------- Draw Loss and Dice Curve --------------------
 
-    show_result(
-        train_loss, train_dice_score, val_loss, val_dice_score, args.model, lr_history
-    )
+    # show_result(
+    #     train_loss, train_dice_score, val_loss, val_dice_score, args.model, lr_history
+    # )
 
-    if not os.path.exists("saved_metrics"):
-        os.mkdir("saved_metrics")
-    # Store loss and dice_score array for analyzing purpose
-    np.save(f"saved_metrics/{args.model}_train_loss.npy", np.array(train_loss))
-    np.save(f"saved_metrics/{args.model}_train_dice.npy", np.array(train_dice_score))
-    np.save(f"saved_metrics/{args.model}_val_loss.npy", np.array(val_loss))
-    np.save(f"saved_metrics/{args.model}_val_dice.npy", np.array(val_dice_score))
+    # if not os.path.exists("saved_metrics"):
+    #     os.mkdir("saved_metrics")
+    # # Store loss and dice_score array for analyzing purpose
+    # np.save(f"saved_metrics/{args.model}_train_loss.npy", np.array(train_loss))
+    # np.save(f"saved_metrics/{args.model}_train_dice.npy", np.array(train_dice_score))
+    # np.save(f"saved_metrics/{args.model}_val_loss.npy", np.array(val_loss))
+    # np.save(f"saved_metrics/{args.model}_val_dice.npy", np.array(val_dice_score))
 
 
 def get_args():

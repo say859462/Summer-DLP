@@ -12,7 +12,7 @@ from models.resnet34_unet import ResNet34_UNet
 from models.unet import Unet
 from oxford_pet import load_dataset
 from train import train
-from utils import dice_score, dice_loss
+from utils import dice_score, dice_loss, show_maskAndPredMask, show_maskOnimage
 
 
 def inference(args, device, model):
@@ -41,24 +41,8 @@ def inference(args, device, model):
             test_dice_scores.append(dice_score(pred_mask, mask).item())
 
             # ----------Store result image Begin----------
-
-            pred_mask = pred_mask.squeeze(0).squeeze(0).cpu().numpy()
-
-            binary_mask = (pred_mask > 0.5).astype(np.uint8)
-
-            np_image = (image.squeeze(0).permute(1, 2, 0).cpu().numpy()).astype(
-                np.uint8
-            )
-            pil_image = Image.fromarray(np_image).convert("RGBA")
-
-            np_rgba = np.array(pil_image)
-
-            # lower alpha value of foreground
-            # foreground：alpha=120；background：alpha=255
-            np_rgba[..., 3] = np.where(binary_mask == 1, 120, 255)
-            pil_result = Image.fromarray(np_rgba)
-            pil_result.save(f"outputs_imgs/{args.model}/{cnt}.png")
-
+            # show_maskOnimage(pred_mask, image, cnt, args)
+            # show_maskAndPredMask(pred_mask, mask, cnt, args)
             cnt += 1
             # ----------Store result image End----------
         tqdm.write(
@@ -67,11 +51,11 @@ def inference(args, device, model):
             )
         )
 
-    if not os.path.exists("saved_metrics"):
-        os.mkdir("saved_metrics")
-    # Store loss and dice_score array for analyzing purpose
-    np.save(f"saved_metrics/{args.model}_test_loss.npy", np.array(test_loss))
-    np.save(f"saved_metrics/{args.model}_test_dice.npy", np.array(test_dice_scores))
+    # if not os.path.exists("saved_metrics"):
+    #     os.mkdir("saved_metrics")
+    # # Store loss and dice_score array for analyzing purpose
+    # np.save(f"saved_metrics/{args.model}_test_loss.npy", np.array(test_loss))
+    # np.save(f"saved_metrics/{args.model}_test_dice.npy", np.array(test_dice_scores))
 
 
 def get_args():
@@ -124,7 +108,11 @@ if __name__ == "__main__":
         else:
             train(args, device, model)
 
-    os.makedirs("outputs_imgs/ResNet34_Unet", exist_ok=True)
-    os.makedirs("outputs_imgs/Unet", exist_ok=True)
+    # os.makedirs("outputs_imgs/stack/ResNet34_Unet", exist_ok=True)
+    # os.makedirs("outputs_imgs/stack/Unet", exist_ok=True)
+    # os.makedirs("outputs_imgs/non_stack/ResNet34_Unet", exist_ok=True)
+    # os.makedirs("outputs_imgs/non_stack/Unet", exist_ok=True)
+    # os.makedirs("outputs_imgs/combined/Unet", exist_ok=True)
+    # os.makedirs("outputs_imgs/combined/ResNet34_Unet", exist_ok=True)
 
     inference(args, device, model)

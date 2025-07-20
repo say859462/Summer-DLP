@@ -169,6 +169,7 @@ class ResNet34_UNet(nn.Module):
                 nn.Conv2d(in_channel, out_channel, kernel_size=1, stride=stride),
                 nn.BatchNorm2d(out_channel),
             )
+            
         layers = []
         layers.append(Residual_Block(in_channel, out_channel, stride, downsample))
         for i in range(1, num_layer):
