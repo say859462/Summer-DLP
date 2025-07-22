@@ -13,4 +13,4 @@ imga/
 lab3_dataset/
 mask_scheduling/
 test_results/
-VQGAN/checkpoints/
+VQGAN.pt
