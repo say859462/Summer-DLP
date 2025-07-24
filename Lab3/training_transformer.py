@@ -13,12 +13,12 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR, ReduceLROnPlateau
 #TODO2 step1-4: design the transformer training strategy
 class TrainTransformer:
-    def __init__(self, args, MaskGit_CONFIGS, learning_rate, scheduler_type):
+    def __init__(self, args, MaskGit_CONFIGS):
         self.model = VQGANTransformer(MaskGit_CONFIGS["model_param"]).to(device=args.device)
         
-        self.optim,self.scheduler = self.configure_optimizers(learning_rate,scheduler_type)
+        self.optim,self.scheduler = self.configure_optimizers()
         
-        self.prepare_training(learning_rate,scheduler_type)
+        self.prepare_training()
         
         self.train_losses = []  # record each epoch training loss
         self.val_losses = []    # record each epoch validate loss
@@ -27,13 +27,14 @@ class TrainTransformer:
         self.best_train_loss = np.inf
         self.best_val_loss =np.inf
         
-        self.learning_rate = learning_rate
-        self.scheduler_type = scheduler_type
+        # self.learning_rate = learning_rate
+        # self.scheduler_type = scheduler_type
     @staticmethod
-    def prepare_training(learning_rate, scheduler_type):
-        checkpoint_dir = os.path.join("transformer_checkpoints", f"lr_{learning_rate}_sched_{scheduler_type}")
-        # os.makedirs("transformer_checkpoints", exist_ok=True)
-        os.makedirs(checkpoint_dir,exist_ok=True)
+    def prepare_training():
+        # checkpoint_dir = os.path.join("transformer_checkpoints", f"lr_{learning_rate}_sched_{scheduler_type}")
+        # os.makedirs(checkpoint_dir,exist_ok=True)
+
+        os.makedirs("transformer_checkpoints", exist_ok=True)
         
     def train_one_epoch(self,train_loader,epoch,args):
         self.model.train()
@@ -62,10 +63,8 @@ class TrainTransformer:
         
         self.train_losses.append(avg_loss) 
         
-        if self.scheduler_type == "ReduceLROnPlateau":
-            self.scheduler.step(avg_loss)  # Step based on training loss
-        else:
-            self.scheduler.step()  # Step for LinearLR + CosineAnnealing
+
+        self.scheduler.step()  # Step for LinearLR + CosineAnnealing
             
         return avg_loss
             
@@ -95,21 +94,18 @@ class TrainTransformer:
             
         avg_loss = total_loss / num_batches
         self.val_losses.append(avg_loss)
+        print("Validation loss = {:.4f}".format(avg_loss))
         return avg_loss
 
-    def configure_optimizers(self, learning_rate = 1e-4, scheduler_type = None):
+    def configure_optimizers(self):
         
-        optimizer = torch.optim.Adam(self.model.parameters(),lr = args.learning_rate)
+        optimizer = torch.optim.Adam(self.model.parameters(),lr = args.learning_rate,weight_decay=1e-5)
         
         # learning rate start with 0.1% of learning_rate
-        if scheduler_type == "LinearLR_CosineAnnealing":
-            warmup_scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=500)
-            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs - 500)
-            scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[500])
-        elif scheduler_type == "ReduceLROnPlateau":
-            scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-        else:
-            scheduler = None
+        warmup_scheduler = LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=100)
+        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs - 100)
+        scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[100])
+
 
         return optimizer, scheduler
 
@@ -121,14 +117,12 @@ class TrainTransformer:
         plt.plot(epochs, self.val_losses, label=f'Validation Loss (min: {min(self.val_losses):.4f})')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
-        plt.title(f'Training and Validation Loss (lr={self.learning_rate}, sched={self.scheduler_type})')
+        plt.title(f'Training and Validation Loss ')
         plt.legend()
         plt.grid(True)
-        save_path = os.path.join("loss_plots", f"loss_lr_{self.learning_rate}_sched_{self.scheduler_type}.png")
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path)
+        plt.savefig("loss_plots.png")
         plt.close()
-        print(f"Loss plot saved to {save_path}")
+        print(f"Loss plot is saved")
         
         
 if __name__ == '__main__':
@@ -141,10 +135,10 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', type=int, default=8, help='Number of worker')
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size for training.')
     parser.add_argument('--partial', type=float, default=1.0, help='Number of epochs to train (default: 50)')    
-    parser.add_argument('--accum-grad', type=int, default=10, help='Number for gradient accumulation.')
+    parser.add_argument('--accum-grad', type=int, default=5, help='Number for gradient accumulation.')
 
     #you can modify the hyperparameters 
-    parser.add_argument('--epochs', type=int, default=1, help='Number of epochs to train.')
+    parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
     parser.add_argument('--save-per-epoch', type=int, default=1, help='Save CKPT per ** epochs(defcault: 1)')
     parser.add_argument('--start-from-epoch', type=int, default=0, help='Number of epochs to train.')
     parser.add_argument('--ckpt-interval', type=int, default=0, help='Number of epochs to train.')
@@ -155,7 +149,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     MaskGit_CONFIGS = yaml.safe_load(open(args.MaskGitConfig, 'r'))
-    # train_transformer = TrainTransformer(args, MaskGit_CONFIGS)
+    train_transformer = TrainTransformer(args, MaskGit_CONFIGS)
     
     train_dataset = LoadTrainData(root= args.train_d_path, partial=args.partial)
     train_loader = DataLoader(train_dataset,
@@ -177,27 +171,24 @@ if __name__ == '__main__':
     best_val = np.inf
     
     # Define test configurations
-    learning_rates = [1e-4, 1e-3]
-    scheduler_types = ["LinearLR_CosineAnnealing", "ReduceLROnPlateau"]
+    # learning_rates = [1e-4]
+    # scheduler_types = ["LinearLR_CosineAnnealing"]
     
 
-    for lr in learning_rates:
-        for sched in scheduler_types:
-            print(f"Starting training with learning_rate={lr}, scheduler={sched}")
-            train_transformer = TrainTransformer(args, MaskGit_CONFIGS, lr, sched)
-            
-            for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
-                train_loss = train_transformer.train_one_epoch(train_loader, epoch, args)
-                val_loss = train_transformer.eval_one_epoch(val_loader, args)
-                
-                # Save best model
-                if val_loss < train_transformer.best_val_loss:
-                    train_transformer.best_val_loss = val_loss
-                    checkpoint_dir = os.path.join("transformer_checkpoints", f"lr_{lr}_sched_{sched}")
-                    torch.save(train_transformer.model.transformer.state_dict(), 
-                               os.path.join(checkpoint_dir, "best_val.pth"))
+
+    train_transformer = TrainTransformer(args, MaskGit_CONFIGS)
+    
+    for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
+        train_loss = train_transformer.train_one_epoch(train_loader, epoch, args)
+        val_loss = train_transformer.eval_one_epoch(val_loader, args)
+        
+        # Save best model
+        if val_loss < train_transformer.best_val_loss:
+            train_transformer.best_val_loss = val_loss
+            torch.save(train_transformer.model.transformer.state_dict(), 
+                         f"transformer_checkpoints/best_val.pth")
                 
 
             
-            # Plot and save loss curve
-            train_transformer.plot_loss()
+    # Plot and save loss curve
+    train_transformer.plot_loss()

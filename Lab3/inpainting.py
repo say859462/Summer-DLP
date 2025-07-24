@@ -12,7 +12,7 @@ from models import MaskGit as VQGANTransformer
 import yaml
 import torch.nn.functional as F
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 
 class MaskGIT:
     def __init__(self, args, MaskGit_CONFIGS):
@@ -73,14 +73,10 @@ class MaskGIT:
                     break
                 
                 # t/T,for mask ratio scheduling
-                # plus 1 to avoid ratio 0 
+
                 ratio = (step+1) / self.total_iter  # this should be updated
 
                 z_indices_predict, mask_bc = self.model.inpainting(z_indices_predict, mask_bc, mask_num, ratio)
-                
-              
-
-
                 
                 # static method yon can modify or not, make sure your visualization results are correct
                 mask_i=mask_bc.view(1, 16, 16)
@@ -117,7 +113,7 @@ class MaskedImage:
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             drop_last=True,
-            pin_memory=False,
+            pin_memory=True,
             shuffle=False,
         )
         mask_ori = LoadMaskData(root=args.test_mask_path, partial=args.partial)
@@ -126,7 +122,7 @@ class MaskedImage:
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             drop_last=True,
-            pin_memory=False,
+            pin_memory=True,
             shuffle=False,
         )
         self.device = args.device
@@ -158,7 +154,7 @@ if __name__ == "__main__":
         default=1.0,
         help="Number of epochs to train (default: 50)",
     )
-    parser.add_argument("--num_workers", type=int, default=2, help="Number of worker")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of worker")
 
     parser.add_argument(
         "--MaskGitConfig",
@@ -189,11 +185,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sweet-spot",
         type=int,
-        default=12,
+        default=10,
         help="sweet spot: the best step in total iteration",
     )
     parser.add_argument(
-        "--total-iter", type=int, default=12, help="total step for mask scheduling"
+        "--total-iter", type=int, default=10,  help="total step for mask scheduling"
     )
     parser.add_argument(
         "--mask-func", type=str, default="cosine", help="mask scheduling function"
@@ -207,6 +203,8 @@ if __name__ == "__main__":
 
     import tqdm
     # Clear memory
+    
+    
     torch.cuda.empty_cache()
     for i, (image, mask) in tqdm.tqdm(enumerate(zip(t.mi_ori, t.mask_ori))):
         image=image.to(device=args.device)

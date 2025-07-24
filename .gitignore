@@ -6,7 +6,7 @@ saved_models/
 __pycache__
 saved_metrics/
 outputs_imgs/
-temp/
+tmp/
 .vscode/
 .gitignore
 imga/
@@ -14,3 +14,4 @@ lab3_dataset/
 mask_scheduling/
 test_results/
 VQGAN.pt
+temp/

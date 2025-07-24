@@ -37,10 +37,7 @@ class MaskGit(nn.Module):
     def encode_to_z(self, x):
         codebook_mapping, codebook_indices, q_loss = self.vqgan.encode(x)
         
-
-        
         # Flatten codebook_indices from (batch,16,16) into (batch,256) for transfomer
-    
         return codebook_mapping, codebook_indices.view(codebook_mapping.shape[0], -1)
 
         
@@ -87,7 +84,7 @@ class MaskGit(nn.Module):
 
         # mask id : self.mask_token_id
         # Normal distribution for percentage of masking
-        mask_ratio = np.random.uniform(0.05, 0.9)
+        mask_ratio = np.random.uniform(0.1, 0.9)
         # True : mask
         mask = torch.bernoulli(mask_ratio* torch.ones(z_indices.shape, device=z_indices.device)).bool()
         
@@ -114,40 +111,26 @@ class MaskGit(nn.Module):
         # Predict token probabilities using transformer
         logits = self.transformer(masked_indices)  # Shape: (batch_size, seq_len, num_codebook_vectors)
         
-        probs = F.softmax(logits, dim=-1)
+        probs = F.softmax(logits, dim=-1) # (batch_size, seq_len, num_codebook_vectors)
 
+        # find max prob of each token
+        # (batch_size, seq_len)
+        z_indices_predict_prob, z_indices_predict = probs.max(dim= -1)
+        # mask the maked part using predicted value
+        z_indices_predict = torch.where(mask,z_indices_predict,z_indices)
         
-        # Sample predicted tokens randomly for diversity
-        z_indices_predict = torch.distributions.categorical.Categorical(logits=logits).sample()
-        while torch.any(z_indices_predict == self.mask_token_id):
-            z_indices_predict = torch.distributions.categorical.Categorical(logits=logits).sample()
-            
-        z_indices_predict = torch.where(mask, z_indices_predict, z_indices)
+        gumble = torch.distributions.Gumbel(0, 1).sample(z_indices_predict_prob.shape).to(z_indices_predict.device)  # gumbel noise
+        temperature = self.choice_temperature * (1 - ratio)
+        confidence = z_indices_predict_prob + temperature * gumble
         
-        # Get probabilities of predicted tokens
-        z_indices_predict_prob = probs.gather(-1, z_indices_predict.unsqueeze(-1)).squeeze(-1)
-
-        # Calculate number of tokens to unmask based on mask scheduling
-        mask_ratio = self.gamma(ratio)
-        num_unmask = torch.floor(mask_num * mask_ratio).long()
-
-        # Add Gumbel noise for confidence-based selection
-        gumbel_noise = torch.distributions.Gumbel(0, 1).sample(z_indices_predict_prob.shape).to(z_indices.device)
-        temperature = self.choice_temperature * (1 - mask_ratio)
-        confidence = z_indices_predict_prob + temperature * gumbel_noise
-        
-        
-        confidence[mask] = -torch.inf
-        _, idx = confidence.topk(num_unmask, dim=-1, largest=True)
-
-        # 更新掩碼
-        mask_bc = torch.zeros_like(mask, dtype=torch.bool, device=z_indices.device)
-        mask_bc.scatter_(dim=1, index=idx, value=True)
-        mask_bc = mask_bc | mask  # 保留原始已知 token
-
-        # 更新 token
-        z_indices_predict = torch.where(mask_bc, z_indices_predict, masked_indices)
-        
+        # The number of mask of next iteration
+        num_mask = math.floor(self.gamma(ratio) * mask_num)
+        # Make sure we dont modify those unmask token
+        confidence[~mask] = torch.inf
+        # Select those  low confidence token as masked token
+        _, idx = confidence.topk(num_mask, dim=-1, largest=False) #update indices to mask only smallest n token
+        mask_bc = torch.zeros(z_indices.shape, dtype=torch.bool, device= z_indices_predict.device)
+        mask_bc = mask_bc.scatter_(dim= 1, index= idx, value= True)
         return z_indices_predict, mask_bc
         
     
