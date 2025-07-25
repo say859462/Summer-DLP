@@ -50,7 +50,8 @@ class kl_annealing:
 
         assert self.annealing_type in ["Cyclical", "Monotonic", "W/O"]
 
-        self.iter = current_epoch
+        self.iter = current_epoch + 1
+
         if self.annealing_type == "Cyclical":
             self.L = self.frange_cycle_linear(
                 n_iter=args.num_epoch,
@@ -77,9 +78,9 @@ class kl_annealing:
         return self.L[self.iter]
 
     def frange_cycle_linear(self, n_iter, start=0.0, stop=1.0, n_cycle=1, ratio=1):
-        # Ref : https://github.com/haofuml/cyclical_annealing
 
-        L = np.ones(n_iter) * stop
+        # Ref : https://github.com/haofuml/cyclical_annealing
+        L = np.ones(n_iter + 1) * stop
         period = n_iter / n_cycle
         step = (stop - start) / (period * ratio)
 
@@ -221,9 +222,7 @@ class VAE_Model(nn.Module):
             label = label.to(self.args.device)
             loss, avg_psnr = self.val_one_step(img, label)
             val_loss.append(loss)
-            self.tqdm_bar(
-                "val", pbar, loss.detach().cpu(), lr=self.scheduler.get_last_lr()[0]
-            )
+            self.tqdm_bar("val", pbar, loss, lr=self.scheduler.get_last_lr()[0])
 
         self.writer.add_scalar(
             f"Loss/{self.args.kl_anneal_type}/val",
@@ -234,17 +233,17 @@ class VAE_Model(nn.Module):
             f"PSNR/{self.args.kl_anneal_type}/val", avg_psnr, self.current_epoch
         )
 
-        return loss.cpu().item(), avg_psnr
+        return loss, avg_psnr
 
     def training_one_step(self, imgs, labels, adapt_TeacherForcing):
 
         # img : torch.Size([2, 16, 3, 32, 64]) (Batch_Size,video length,channel,height,width)
 
-        total_mse = 0
-        total_kl = 0
+        batch_size = imgs.shape[0]
+        total_loss = 0
         beta = self.kl_annealing.get_beta()
 
-        for batch_idx in range(self.batch_size):
+        for batch_idx in range(batch_size):
 
             img = imgs[batch_idx]
             label = labels[batch_idx]
@@ -257,10 +256,7 @@ class VAE_Model(nn.Module):
 
             for i in range(1, self.train_vi_len):
 
-                if adapt_TeacherForcing:
-                    prev_frame = img[i - 1].unsqueeze(0)
-                else:
-                    prev_frame = out
+                prev_frame = img[i - 1].unsqueeze(0) if adapt_TeacherForcing else out
 
                 #  ------------- Encoder Start -------------
 
@@ -270,7 +266,7 @@ class VAE_Model(nn.Module):
 
                 #  ------------- Encoder End -------------
 
-                kl += kl_criterion(mu, logvar, batch_size=1)
+                kl += kl_criterion(mu, logvar, batch_size)
 
                 # ------------- Decoder Start -------------
 
@@ -284,42 +280,32 @@ class VAE_Model(nn.Module):
 
                 # ------------- Decoder End -------------
 
-            # Average of a vedio
-            # Make sure to minus , since we only interate self.train_vi_len - 1 times
-            # We dont need to predict the first frame
-            kl /= self.train_vi_len - 1
-            mse /= self.train_vi_len - 1
+            mse = mse / (self.train_vi_len - 1)
+            kl = kl / (self.train_vi_len - 1)
+            print("Epoch {} , KL {}, MSE {}".format(self.current_epoch, kl, mse))
 
-            total_kl += kl
-            total_mse += mse
+            loss = mse + beta * kl
+            self.optim.zero_grad()
+            loss.backward()
+            self.optim.step()
 
-        # Average of the whole batch
-        avg_mse = total_mse / self.batch_size
-        avg_kl = total_kl / self.batch_size
+            total_loss += loss
 
-        loss = avg_mse + beta * avg_kl
-
-        self.optim.zero_grad()
-        loss.backward()
-        self.optim.step()
-
-        return loss
+        return total_loss / batch_size
 
     def val_one_step(self, imgs, labels):
 
-        total_mse = 0
-        total_kl = 0
-        total_psnr = 0
+        batch_size = imgs.shape[0]
+        total_loss = 0
         beta = self.kl_annealing.get_beta()
-
-        for batch_idx in range(self.batch_size):
+        psnr = []
+        for batch_idx in range(batch_size):
 
             img = imgs[batch_idx]
             label = labels[batch_idx]
 
             mse = 0
             kl = 0
-            psnr = 0
             # Previous output as current input
             out = img[0].unsqueeze(0)
 
@@ -335,7 +321,7 @@ class VAE_Model(nn.Module):
 
                 #  ------------- Encoder End -------------
 
-                kl += kl_criterion(mu, logvar, batch_size=1)
+                kl += kl_criterion(mu, logvar, batch_size)
 
                 # ------------- Decoder Start -------------
 
@@ -348,28 +334,15 @@ class VAE_Model(nn.Module):
 
                 #  Calculate the MSE loss of a frame
                 mse += self.mse_criterion(gen_out, img[i].unsqueeze(0))
-                psnr += Generate_PSNR(gen_out, img[i].unsqueeze(0))
+                psnr.append(Generate_PSNR(gen_out, img[i].unsqueeze(0)).item())
                 # ------------- Decoder End -------------
 
-            # Average of a vedio
-            # Make sure to minus , since we only interate self.train_vi_len - 1 times
-            # We dont need to predict the first frame
-            kl /= self.val_vi_len - 1
-            mse /= self.val_vi_len - 1
-            psnr /= self.val_vi_len - 1
+            mse = mse / (self.val_vi_len - 1)
+            kl = kl / (self.val_vi_len - 1)
 
-            total_kl += kl
-            total_mse += mse
-            total_psnr += psnr
+            total_loss += mse + beta * kl
 
-        # Average of the whole batch
-        avg_mse = total_mse / self.batch_size
-        avg_kl = total_kl / self.batch_size
-        avg_psnr = total_psnr / self.batch_size
-
-        loss = avg_mse + beta * avg_kl
-
-        return loss, avg_psnr
+        return total_loss.cpu().item() / batch_size, np.mean(psnr)
 
     def make_gif(self, images_list, img_name):
         new_list = []
@@ -443,7 +416,8 @@ class VAE_Model(nn.Module):
 
     def tqdm_bar(self, mode, pbar, loss, lr):
         pbar.set_description(
-            f"({mode}) Epoch {self.current_epoch}, lr:{lr}", refresh=False
+            f"({mode}) Epoch [{self.current_epoch}/{self.args.num_epoch}], lr:{lr}",
+            refresh=False,
         )
         pbar.set_postfix(loss=float(loss), refresh=False)
         pbar.refresh()
@@ -487,6 +461,8 @@ class VAE_Model(nn.Module):
 def main(args):
 
     os.makedirs(args.save_root, exist_ok=True)
+    if args.ckpt_path is not None:
+        os.makedirs(args.ckpt_path, exist_ok=True)
     model = VAE_Model(args).to(args.device)
     model.load_checkpoint()
     if args.test:
@@ -517,12 +493,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_root",
         type=str,
-        default=".saves/train",
+        default="saves/train",
         help="The path to save your data",
     )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument(
-        "--num_epoch", type=int, default=70, help="number of total epoch"
+        "--num_epoch", type=int, default=5, help="number of total epoch"
     )
     parser.add_argument(
         "--per_save", type=int, default=3, help="Save checkpoint every seted epoch"
@@ -580,7 +556,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="./checkpoints/train",
+        default=None,
         help="The path of your checkpoints",
     )
 
