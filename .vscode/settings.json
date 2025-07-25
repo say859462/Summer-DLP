@@ -1,8 +1,0 @@
-{
-    "git.ignoreLimitWarning": true,
-    "markdownlint.config": {
-    "MD033": {
-      "allowed_elements": ["nobr", "sup", "a"]
-    }
-  }
-}
