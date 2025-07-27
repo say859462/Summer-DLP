@@ -34,7 +34,8 @@ TA_ = """
 
 
 def get_key(fp):
-    filename = fp.split("/")[-1]
+
+    filename = os.path.basename(fp)
     filename = filename.split(".")[0].replace("frame", "")
     return int(filename)
 
@@ -51,8 +52,7 @@ class Dataset_Dance(torchData):
         self.img_folder = []
         self.label_folder = []
 
-        data_num = len(glob("./Demo_Test/*"))
-        for i in range(data_num):
+        for i in range(5):
             self.img_folder.append(
                 sorted(glob(os.path.join(root, f"test/test_img/{i}/*")), key=get_key)
             )
@@ -108,9 +108,12 @@ class Test_model(VAE_Model):
     @torch.no_grad()
     def eval(self):
         val_loader = self.val_dataloader()
+
         pred_seq_list = []
-        for idx, (img, label) in enumerate(tqdm(val_loader, ncols=80)):
+
+        for idx, (img, label) in enumerate(tqdm(val_loader, ncols=120)):
             img = img.to(self.args.device)
+
             label = label.to(self.args.device)
             pred_seq = self.val_one_step(img, label, idx)
             pred_seq_list.append(pred_seq)
@@ -137,8 +140,19 @@ class Test_model(VAE_Model):
         decoded_frame_list = [img[0].cpu()]
         label_list = []
 
-        # TODO
-        raise NotImplementedError
+        for i in range(1, 630):
+            frame_feat = self.frame_transformation(
+                decoded_frame_list[i - 1].to(self.args.device)
+            )
+            label_feat = self.label_transformation(label[i]).to(self.args.device)
+            z, _, _ = self.Gaussian_Predictor(frame_feat, label_feat)
+            # Generate noises
+            z = torch.randn_like(z)
+
+            out = self.Decoder_Fusion(frame_feat, label_feat, z)
+            out = self.Generator(out)
+            decoded_frame_list.append(out.cpu())
+            label_list.append(label_feat.cpu())
 
         # Please do not modify this part, it is used for visulization
         generated_frame = stack(decoded_frame_list).permute(1, 0, 2, 3, 4)
@@ -287,7 +301,10 @@ if __name__ == "__main__":
         help="Decay step that teacher forcing ratio adopted",
     )
     parser.add_argument(
-        "--ckpt_path", type=str, default='./saves/test', help="The path of your checkpoints"
+        "--ckpt_path",
+        type=str,
+        default="./saves/test",
+        help="The path of your checkpoints",
     )
 
     # Training Strategy
@@ -306,7 +323,13 @@ if __name__ == "__main__":
     )
 
     # Kl annealing stratedy arguments
-    parser.add_argument("--kl_anneal_type", type=str, default="Cyclical",choices=["Cyclical", "Monotonic", "W/O"], help="")
+    parser.add_argument(
+        "--kl_anneal_type",
+        type=str,
+        default="Cyclical",
+        choices=["Cyclical", "Monotonic", "W/O"],
+        help="",
+    )
     parser.add_argument("--kl_anneal_cycle", type=int, default=10, help="")
     parser.add_argument("--kl_anneal_ratio", type=float, default=1, help="")
 

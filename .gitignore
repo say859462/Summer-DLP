@@ -16,3 +16,6 @@ test_results/
 VQGAN.pt
 temp/
 LAB4_Dataset/
+plots/
+saves/
+record.md

@@ -19,21 +19,27 @@ from torchvision.utils import save_image
 import random
 import torch.optim as optim
 from torch import stack
-
+from torch import Tensor
 from tqdm import tqdm
 import imageio
 
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from math import log10
-
-from torch.utils import tensorboard
 
 
 def Generate_PSNR(imgs1, imgs2, data_range=1.0):
-    """PSNR for torch tensor"""
-    mse = nn.functional.mse_loss(imgs1, imgs2)  # wrong computation for batch size > 1
-    psnr = 20 * log10(data_range) - 10 * torch.log10(mse)
-    return psnr
+    """PSNR for torch tensor >1 Batch is available"""
+    # Flatten per image: (B, C, H, W) → (B, -1)
+    imgs1 = imgs1.view(imgs1.size(0), -1)
+    imgs2 = imgs2.view(imgs2.size(0), -1)
+
+    mse = torch.mean((imgs1 - imgs2) ** 2, dim=1)  # Per image MSE
+    psnr = 20 * torch.log10(
+        torch.tensor(data_range, device=mse.device)
+    ) - 10 * torch.log10(mse)
+
+    return psnr.mean()  # Return average PSNR over batch
 
 
 def kl_criterion(mu, logvar, batch_size):
@@ -42,13 +48,12 @@ def kl_criterion(mu, logvar, batch_size):
     return KLD
 
 
-# L = Lreconstruction  + beta * Lkl
 class kl_annealing:
     def __init__(self, args, current_epoch=0):
 
         self.annealing_type = args.kl_anneal_type
 
-        assert self.annealing_type in ["Cyclical", "Monotonic", "W/O"]
+        assert self.annealing_type in ["Cyclical", "Monotonic", "Without"]
 
         self.iter = current_epoch + 1
 
@@ -68,6 +73,14 @@ class kl_annealing:
                 n_cycle=1,
                 ratio=args.kl_anneal_ratio,
             )
+        elif self.annealing_type == "Cosine":
+            self.L = self.frange_cosine(
+                n_iter=args.num_epoch,
+                start=0.0,
+                stop=1.0,
+                n_cycle=args.kl_anneal_cycle,
+                ratio=args.kl_anneal_ratio,
+            )
         else:
             self.L = np.ones(args.num_epoch + 1)
 
@@ -80,7 +93,7 @@ class kl_annealing:
     def frange_cycle_linear(self, n_iter, start=0.0, stop=1.0, n_cycle=1, ratio=1):
 
         # Ref : https://github.com/haofuml/cyclical_annealing
-        L = np.ones(n_iter + 1) * stop
+        L = np.ones(n_iter + 1)
         period = n_iter / n_cycle
         step = (stop - start) / (period * ratio)
 
@@ -92,6 +105,17 @@ class kl_annealing:
                 v += step
                 i += 1
 
+        return L
+
+    def frange_cosine(self, n_iter, start=0.0, stop=1.0, n_cycle=1, ratio=1.0):
+        L = np.ones(n_iter + 1)
+        period = n_iter / n_cycle
+        for c in range(n_cycle):
+            for i in range(int(period)):
+                t = i / (period * ratio)
+                v = start + (stop - start) * 0.5 * (1 - np.cos(np.pi * t))
+                L[int(i + c * period)] = v
+            L[int((c + 1) * period) :] = stop
         return L
 
 
@@ -115,9 +139,28 @@ class VAE_Model(nn.Module):
         # Generative model
         self.Generator = Generator(input_nc=args.D_out_dim, output_nc=3)
 
-        self.optim = optim.Adam(self.parameters(), lr=self.args.lr)
+        # Add weight decay to avoid overfitting and gradient explosion
+        self.optim = optim.AdamW(self.parameters(), lr=self.args.lr, weight_decay=5e-4)
         self.scheduler = optim.lr_scheduler.MultiStepLR(
-            self.optim, milestones=[2, 5], gamma=0.1
+            self.optim, milestones=[2], gamma=0.1
+        )
+        # warmup_scheduler = optim.lr_scheduler.LinearLR(
+        #     self.optim, start_factor=0.01, end_factor=1.0, total_iters=5
+        # )
+        # cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        #     self.optim, T_max=args.num_epoch - 5, eta_min=1e-5
+        # )
+        # self.scheduler = optim.lr_scheduler.SequentialLR(
+        #     self.optim,
+        #     schedulers=[warmup_scheduler, cosine_scheduler],
+        #     milestones=[5],
+        # )
+
+        self.scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optim,
+            mode="max",
+            factor=0.1,
+            patience=5,
         )
         self.kl_annealing = kl_annealing(args, current_epoch=0)
         self.mse_criterion = nn.MSELoss()
@@ -127,14 +170,17 @@ class VAE_Model(nn.Module):
         self.tfr = args.tfr
         self.tfr_d_step = args.tfr_d_step
         self.tfr_sde = args.tfr_sde
-
+        self.model_prefix = f"kl-type_{args.kl_anneal_type}_tfr_{args.tfr}_teacher-decay_{args.tfr_d_step}"
         self.train_vi_len = args.train_vi_len
         self.val_vi_len = args.val_vi_len
         self.batch_size = args.batch_size
-
-        self.writer = tensorboard.SummaryWriter(
-            f"logs/kl-type_{args.kl_anneal_type}_tfr_{args.tfr}_teacher-decay_{args.tfr_d_step}"
-        )
+        self.history = {
+            "train_loss": [],
+            "val_loss": [],
+            "psnr": [],
+            "beta": [],
+            "tfr": [],
+        }
 
     def forward(self, img, label):
         pass
@@ -143,13 +189,14 @@ class VAE_Model(nn.Module):
 
         min_val_loss = torch.inf
         max_psnr = 0.0
+
         for i in range(self.args.num_epoch):
             train_loader = self.train_dataloader()
             # tfr is the probability that should the model adapt teacher forcing technique
             adapt_TeacherForcing = True if random.random() < self.tfr else False
 
             train_loss = []
-            for img, label in (pbar := tqdm(train_loader, ncols=120)):
+            for img, label in (pbar := tqdm(train_loader, ncols=170)):
                 img = img.to(self.args.device)
                 label = label.to(self.args.device)
 
@@ -185,164 +232,222 @@ class VAE_Model(nn.Module):
             #         )
             #     )
 
-            # Writer for tensorboard
-            self.writer.add_scalar(
-                f"Loss/{self.args.kl_anneal_type}/train",
-                np.mean(train_loss),
-                self.current_epoch,
-            )
-            self.writer.add_scalar(
-                f"beta/{self.args.kl_anneal_type}/train", beta, self.current_epoch
-            )
-            self.writer.add_scalar(
-                f"tfr/{self.args.kl_anneal_type}/train", self.tfr, self.current_epoch
-            )
-
             val_loss, avg_psnr = self.eval()
+            tqdm.write(
+                f"Validation - Avg Loss: {val_loss:.6f}, Avg PSNR: {avg_psnr:.6f}"
+            )
 
-            if val_loss <= min_val_loss and avg_psnr >= max_psnr:
+            # We starting to save the model weight until over 10 epochs
+            if (
+                val_loss <= min_val_loss
+                and avg_psnr >= max_psnr
+                and self.current_epoch >= 5
+            ):
+                min_val_loss = val_loss
+                max_psnr = avg_psnr
                 self.save(
-                    os.path.join(
-                        self.args.save_root, f"best_{val_loss:.4f}_{avg_psnr:.4f}.ckpt"
-                    )
+                    os.path.join(self.args.save_root, f"{self.model_prefix}.ckpt")
                 )
 
+            # Save the history for plotting
+            self.history["train_loss"].append(loss.item())
+            self.history["val_loss"].append(val_loss)
+            self.history["psnr"].append(avg_psnr)
+            self.history["beta"].append(beta)
+            self.history["tfr"].append(self.tfr)
+
+            # Save the plot at last epoch
+            if self.current_epoch == self.args.num_epoch - 1:
+                self.plot_history()
+
             self.current_epoch += 1
+            # update learning rate based on avg psnr
             self.scheduler.step()
+            self.scheduler2.step(avg_psnr)
+
+            # update kl annealing and teacher forcing ratio
             self.teacher_forcing_ratio_update()
             self.kl_annealing.update()
+
+    def plot_history(self):
+        os.makedirs(f"plots/{self.model_prefix}", exist_ok=True)
+
+        def save_multiple(metric_dict, title, filename):
+            plt.figure()
+            color_map = cm.get_cmap("tab10")
+
+            for i, (label, values) in enumerate(metric_dict.items()):
+                color = color_map(i % 10)
+                plt.plot(values, label=label, color=color)
+
+                max_val = max(values)
+                min_val = min(values)
+                avg_val = sum(values) / len(values)
+                max_idx = values.index(max_val)
+                min_idx = values.index(min_val)
+
+                plt.scatter(
+                    max_idx,
+                    max_val,
+                    marker="o",
+                    color=color,
+                    label=f"{label} max: {max_val:.6f}",
+                )
+                plt.scatter(
+                    min_idx,
+                    min_val,
+                    marker="x",
+                    color=color,
+                    label=f"{label} min: {min_val:.6f}",
+                )
+                plt.hlines(
+                    avg_val,
+                    0,
+                    len(values) - 1,
+                    linestyles="--",
+                    colors=color,
+                    label=f"{label} avg: {avg_val:.6f}",
+                )
+
+            plt.xlabel("Epoch")
+            plt.ylabel(title + " (log scale)")
+            plt.yscale("log")
+            plt.title(f"{title} over Epochs")
+            plt.grid(True)
+            plt.legend(loc="best", fontsize="small")
+            plt.tight_layout()
+            plt.savefig(f"plots/{self.model_prefix}/{filename}.png")
+            plt.close()
+
+        def save_plot(metric, ylabel):
+            values = self.history[metric]
+            plt.figure()
+            plt.plot(values, label=metric)
+            max_val = max(values)
+            min_val = min(values)
+            avg_val = sum(values) / len(values)
+            max_idx = values.index(max_val)
+            min_idx = values.index(min_val)
+            plt.scatter(max_idx, max_val, marker="o", label=f"Max: {max_val:.6f}")
+            plt.scatter(min_idx, min_val, marker="x", label=f"Min: {min_val:.6f}")
+            plt.hlines(
+                avg_val,
+                0,
+                len(values) - 1,
+                linestyles="--",
+                label=f"Avg: {avg_val:.6f}",
+            )
+
+            log = False
+            if metric == "train_loss" or metric == "val_loss":
+                plt.yscale("log")
+                log = True
+
+            plt.xlabel("Epoch")
+            plt.ylabel(ylabel + " (log scale)" if log else ylabel)
+            plt.title(f"{ylabel} over Epochs")
+            plt.grid(True)
+            plt.legend(loc="best", fontsize="small")
+            plt.tight_layout()
+            plt.savefig(f"plots/{self.model_prefix}/{metric}.png")
+            plt.close()
+
+        save_multiple(
+            {"train": self.history["train_loss"], "val": self.history["val_loss"]},
+            "Loss",
+            "loss_compare",
+        )
+        save_plot("train_loss", "Train Loss")
+        save_plot("val_loss", "Validation Loss")
+        save_plot("psnr", "PSNR")
+        save_plot("beta", "KL Beta")
+        save_plot("tfr", "Teacher Forcing Ratio")
 
     @torch.no_grad()
     def eval(self):
         val_loader = self.val_dataloader()
         val_loss = []
 
-        for img, label in (pbar := tqdm(val_loader, ncols=120)):
+        for img, label in (pbar := tqdm(val_loader, ncols=170)):
             img = img.to(self.args.device)
             label = label.to(self.args.device)
             loss, avg_psnr = self.val_one_step(img, label)
             val_loss.append(loss)
             self.tqdm_bar("val", pbar, loss, lr=self.scheduler.get_last_lr()[0])
 
-        self.writer.add_scalar(
-            f"Loss/{self.args.kl_anneal_type}/val",
-            np.mean(val_loss),
-            self.current_epoch,
-        )
-        self.writer.add_scalar(
-            f"PSNR/{self.args.kl_anneal_type}/val", avg_psnr, self.current_epoch
-        )
-
+        # This is correct since batch size is 1 in validation
         return loss, avg_psnr
 
     def training_one_step(self, imgs, labels, adapt_TeacherForcing):
 
         # img : torch.Size([2, 16, 3, 32, 64]) (Batch_Size,video length,channel,height,width)
-
-        batch_size = imgs.shape[0]
-        total_loss = 0
+        pred_img = imgs[:, 0]
+        loss = torch.zeros(1, device=self.args.device)
         beta = self.kl_annealing.get_beta()
 
-        for batch_idx in range(batch_size):
+        for i in range(1, self.train_vi_len):
+            prev_img = imgs[:, i - 1] if adapt_TeacherForcing else pred_img
 
-            img = imgs[batch_idx]
-            label = labels[batch_idx]
+            gt_img_feat = self.frame_transformation(imgs[:, i])
+            pred_img_feat = self.frame_transformation(prev_img)
 
-            mse = 0
-            kl = 0
+            label_feat = self.label_transformation(labels[:, i])
 
-            # Previous output as current input
-            out = img[0].unsqueeze(0)
+            z, mu, logvar = self.Gaussian_Predictor(gt_img_feat, label_feat)
 
-            for i in range(1, self.train_vi_len):
+            decorder_fusion_out = self.Decoder_Fusion(pred_img_feat, label_feat, z)
+            pred_img = self.Generator(decorder_fusion_out)
 
-                prev_frame = img[i - 1].unsqueeze(0) if adapt_TeacherForcing else out
+            loss += self.mse_criterion(pred_img, imgs[:, i]) + beta * kl_criterion(
+                mu, logvar, self.batch_size
+            )
 
-                #  ------------- Encoder Start -------------
+        # Divide (self.train_vi_len - 1), since we skip the prediction of first frame
+        loss = loss / (self.train_vi_len - 1)
 
-                pose_feat = self.label_transformation(label[i].unsqueeze(0))
-                frame_feat = self.frame_transformation(img[i].unsqueeze(0))
-                z, mu, logvar = self.Gaussian_Predictor(frame_feat, pose_feat)
+        # Check for NaN or Inf before backward
+        if torch.isnan(loss) or torch.isinf(loss):
+            tqdm.write("Warning: Loss is NaN or Inf. Skipping this batch.")
+            return torch.tensor(np.inf, device=self.args.device)
 
-                #  ------------- Encoder End -------------
+        self.optim.zero_grad()
+        loss.backward()
 
-                kl += kl_criterion(mu, logvar, batch_size)
+        # Clip gradient to prevent explosion
+        # nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        self.optimizer_step()
 
-                # ------------- Decoder Start -------------
-
-                # Add detach to avoid updating the grad of previout output
-                frame_feat_2 = self.frame_transformation(prev_frame).detach()
-                feats = self.Decoder_Fusion(frame_feat_2, pose_feat, z)
-                gen_out = self.Generator(feats)
-                out = gen_out
-                #  Calculate the MSE loss of a frame
-                mse += self.mse_criterion(gen_out, img[i].unsqueeze(0))
-
-                # ------------- Decoder End -------------
-
-            mse = mse / (self.train_vi_len - 1)
-            kl = kl / (self.train_vi_len - 1)
-            print("Epoch {} , KL {}, MSE {}".format(self.current_epoch, kl, mse))
-
-            loss = mse + beta * kl
-            self.optim.zero_grad()
-            loss.backward()
-            self.optim.step()
-
-            total_loss += loss
-
-        return total_loss / batch_size
+        return loss
 
     def val_one_step(self, imgs, labels):
 
-        batch_size = imgs.shape[0]
-        total_loss = 0
+        # imgs shape: torch.Size([1, 630, 3, 32, 64])
+        pred_img = imgs[:, 0]
+        loss = torch.zeros(1, device=self.args.device)
         beta = self.kl_annealing.get_beta()
         psnr = []
-        for batch_idx in range(batch_size):
+        for i in range(1, self.val_vi_len):
+            prev_img = pred_img
 
-            img = imgs[batch_idx]
-            label = labels[batch_idx]
+            gt_img_feat = self.frame_transformation(imgs[:, i])
+            pred_img_feat = self.frame_transformation(prev_img)
 
-            mse = 0
-            kl = 0
-            # Previous output as current input
-            out = img[0].unsqueeze(0)
+            label_feat = self.label_transformation(labels[:, i])
 
-            for i in range(1, self.val_vi_len):
+            z, mu, logvar = self.Gaussian_Predictor(gt_img_feat, label_feat)
 
-                prev_frame = out.detach()
+            decorder_fusion_out = self.Decoder_Fusion(pred_img_feat, label_feat, z)
+            pred_img = self.Generator(decorder_fusion_out)
 
-                #  ------------- Encoder Start -------------
+            loss += self.mse_criterion(pred_img, imgs[:, i]) + beta * kl_criterion(
+                mu, logvar, self.batch_size
+            )
+            psnr.append(Generate_PSNR(pred_img, imgs[:, i]).cpu().item())
 
-                pose_feat = self.label_transformation(label[i].unsqueeze(0))
-                frame_feat = self.frame_transformation(img[i].unsqueeze(0))
-                z, mu, logvar = self.Gaussian_Predictor(frame_feat, pose_feat)
+        # Divide (self.train_vi_len - 1), since we skip the prediction of first frame
+        loss = loss / (self.val_vi_len - 1)
 
-                #  ------------- Encoder End -------------
-
-                kl += kl_criterion(mu, logvar, batch_size)
-
-                # ------------- Decoder Start -------------
-
-                # Add detach to avoid updating the grad of previout output
-                frame_feat_2 = self.frame_transformation(prev_frame).detach()
-                feats = self.Decoder_Fusion(frame_feat_2, pose_feat, z)
-                gen_out = self.Generator(feats)
-
-                out = gen_out
-
-                #  Calculate the MSE loss of a frame
-                mse += self.mse_criterion(gen_out, img[i].unsqueeze(0))
-                psnr.append(Generate_PSNR(gen_out, img[i].unsqueeze(0)).item())
-                # ------------- Decoder End -------------
-
-            mse = mse / (self.val_vi_len - 1)
-            kl = kl / (self.val_vi_len - 1)
-
-            total_loss += mse + beta * kl
-
-        return total_loss.cpu().item() / batch_size, np.mean(psnr)
+        return loss.cpu().item(), np.mean(psnr)
 
     def make_gif(self, images_list, img_name):
         new_list = []
@@ -410,13 +515,13 @@ class VAE_Model(nn.Module):
 
     def teacher_forcing_ratio_update(self):
         # For each tfr_sde steps , the ratio will decay tfr_d_step
-        if (self.current_epoch + 1) % self.tfr_sde == 0:
+        if (self.current_epoch) % self.tfr_sde == 0:
             self.tfr -= self.tfr_d_step
             self.tfr = max(0, self.tfr)
 
     def tqdm_bar(self, mode, pbar, loss, lr):
         pbar.set_description(
-            f"({mode}) Epoch [{self.current_epoch}/{self.args.num_epoch}], lr:{lr}",
+            f"({mode}) Epoch [{self.current_epoch + 1}/{self.args.num_epoch}], lr:{lr}",
             refresh=False,
         )
         pbar.set_postfix(loss=float(loss), refresh=False)
@@ -473,8 +578,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--lr", type=float, default=0.001, help="initial learning rate")
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-3, help="init ial learning rate")
     parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda")
     parser.add_argument("--optim", type=str, choices=["Adam", "AdamW"], default="Adam")
     parser.add_argument("--gpu", type=int, default=1)
@@ -496,9 +601,11 @@ if __name__ == "__main__":
         default="saves/train",
         help="The path to save your data",
     )
-    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument(
-        "--num_epoch", type=int, default=5, help="number of total epoch"
+        "--num_workers", type=int, default=4, help="Number of workers for dataloader"
+    )
+    parser.add_argument(
+        "--num_epoch", type=int, default=75, help="number of total epoch"
     )
     parser.add_argument(
         "--per_save", type=int, default=3, help="Save checkpoint every seted epoch"
@@ -580,7 +687,7 @@ if __name__ == "__main__":
         "--kl_anneal_type",
         type=str,
         default="Cyclical",
-        choices=["Cyclical", "Monotonic", "W/O"],
+        choices=["Cyclical", "Monotonic", "Without", "Cosine"],
         help="",
     )
     parser.add_argument("--kl_anneal_cycle", type=int, default=10, help="")

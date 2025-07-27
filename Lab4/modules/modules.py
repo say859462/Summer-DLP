@@ -84,6 +84,7 @@ class Label_Encoder(nn.Sequential):
     Output the distribution of image and label
 """
 
+
 class Gaussian_Predictor(nn.Sequential):
     def __init__(self, in_chans=48, out_chans=96):
         super(Gaussian_Predictor, self).__init__(
@@ -114,9 +115,12 @@ class Gaussian_Predictor(nn.Sequential):
 
         return z, mu, logvar
 
+
 """
     Receive image , label , param (latent var), produce the intermediate features
 """
+
+
 class Decoder_Fusion(nn.Sequential):
     def __init__(self, in_chans=48, out_chans=96):
         super().__init__(
