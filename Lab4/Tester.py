@@ -148,6 +148,7 @@ class Test_model(VAE_Model):
             z, _, _ = self.Gaussian_Predictor(frame_feat, label_feat)
             # Generate noises
             z = torch.randn_like(z)
+            
 
             out = self.Decoder_Fusion(frame_feat, label_feat, z)
             out = self.Generator(out)

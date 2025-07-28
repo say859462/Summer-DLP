@@ -53,7 +53,7 @@ class kl_annealing:
 
         self.annealing_type = args.kl_anneal_type
 
-        assert self.annealing_type in ["Cyclical", "Monotonic", "Without"]
+        assert self.annealing_type in ["Cyclical", "Monotonic", "Without", "Cosine"]
 
         self.iter = current_epoch + 1
 
@@ -141,8 +141,15 @@ class VAE_Model(nn.Module):
 
         # Add weight decay to avoid overfitting and gradient explosion
         self.optim = optim.AdamW(self.parameters(), lr=self.args.lr, weight_decay=5e-4)
+        self.kl_annealing = kl_annealing(args, current_epoch=0)
+
+
         self.scheduler = optim.lr_scheduler.MultiStepLR(
-            self.optim, milestones=[2], gamma=0.1
+            self.optim,
+            milestones=[
+                2,
+            ],
+            gamma=0.1,
         )
         # warmup_scheduler = optim.lr_scheduler.LinearLR(
         #     self.optim, start_factor=0.01, end_factor=1.0, total_iters=5
@@ -159,10 +166,10 @@ class VAE_Model(nn.Module):
         self.scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(
             self.optim,
             mode="max",
-            factor=0.1,
+            factor=0.5,
             patience=5,
+            min_lr=1e-5,
         )
-        self.kl_annealing = kl_annealing(args, current_epoch=0)
         self.mse_criterion = nn.MSELoss()
         self.current_epoch = 0
 
@@ -232,7 +239,7 @@ class VAE_Model(nn.Module):
             #         )
             #     )
 
-            val_loss, avg_psnr = self.eval()
+            val_loss, avg_psnr, _ = self.eval()
             tqdm.write(
                 f"Validation - Avg Loss: {val_loss:.6f}, Avg PSNR: {avg_psnr:.6f}"
             )
@@ -280,11 +287,14 @@ class VAE_Model(nn.Module):
                 color = color_map(i % 10)
                 plt.plot(values, label=label, color=color)
 
-                max_val = max(values)
-                min_val = min(values)
-                avg_val = sum(values) / len(values)
-                max_idx = values.index(max_val)
-                min_idx = values.index(min_val)
+                values_array = np.array(values)
+                valid_values = values_array[np.isfinite(values_array)]
+
+                max_val = np.max(valid_values)
+                min_val = np.min(valid_values)
+                avg_val = np.mean(valid_values)
+                max_idx = np.where(values_array == max_val)[0][0]
+                min_idx = np.where(values_array == min_val)[0][0]
 
                 plt.scatter(
                     max_idx,
@@ -323,11 +333,15 @@ class VAE_Model(nn.Module):
             values = self.history[metric]
             plt.figure()
             plt.plot(values, label=metric)
-            max_val = max(values)
-            min_val = min(values)
-            avg_val = sum(values) / len(values)
-            max_idx = values.index(max_val)
-            min_idx = values.index(min_val)
+
+            values_array = np.array(values)
+            valid_values = values_array[np.isfinite(values_array)]
+
+            max_val = np.max(valid_values)
+            min_val = np.min(valid_values)
+            avg_val = np.mean(valid_values)
+            max_idx = np.where(values_array == max_val)[0][0]
+            min_idx = np.where(values_array == min_val)[0][0]
             plt.scatter(max_idx, max_val, marker="o", label=f"Max: {max_val:.6f}")
             plt.scatter(min_idx, min_val, marker="x", label=f"Min: {min_val:.6f}")
             plt.hlines(
@@ -371,12 +385,12 @@ class VAE_Model(nn.Module):
         for img, label in (pbar := tqdm(val_loader, ncols=170)):
             img = img.to(self.args.device)
             label = label.to(self.args.device)
-            loss, avg_psnr = self.val_one_step(img, label)
+            loss, avg_psnr, psnr_list = self.val_one_step(img, label)
             val_loss.append(loss)
             self.tqdm_bar("val", pbar, loss, lr=self.scheduler.get_last_lr()[0])
 
         # This is correct since batch size is 1 in validation
-        return loss, avg_psnr
+        return loss, avg_psnr, psnr_list
 
     def training_one_step(self, imgs, labels, adapt_TeacherForcing):
 
@@ -447,7 +461,7 @@ class VAE_Model(nn.Module):
         # Divide (self.train_vi_len - 1), since we skip the prediction of first frame
         loss = loss / (self.val_vi_len - 1)
 
-        return loss.cpu().item(), np.mean(psnr)
+        return loss.cpu().item(), np.mean(psnr), psnr
 
     def make_gif(self, images_list, img_name):
         new_list = []
@@ -535,6 +549,7 @@ class VAE_Model(nn.Module):
                 "lr": self.scheduler.get_last_lr()[0],
                 "tfr": self.tfr,
                 "last_epoch": self.current_epoch,
+                "history": self.history,
             },
             path,
         )
@@ -551,16 +566,31 @@ class VAE_Model(nn.Module):
             self.optim.load_state_dict(checkpoint["optimizer"])
 
             self.scheduler = optim.lr_scheduler.MultiStepLR(
-                self.optim, milestones=[2, 4], gamma=0.1
+                self.optim, milestones=[2, ], gamma=0.1
+            )
+            self.scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optim,
+                mode="max",
+                factor=0.5,
+                patience=5,
+                min_lr=1e-5,
             )
             self.kl_annealing = kl_annealing(
                 self.args, current_epoch=checkpoint["last_epoch"]
             )
             self.current_epoch = checkpoint["last_epoch"]
+            self.history = checkpoint["history"]
 
     def optimizer_step(self):
         nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         self.optim.step()
+
+    def load_weight(self):
+        if self.args.ckpt_path != None:
+            checkpoint = torch.load(self.args.ckpt_path)
+            self.load_state_dict(checkpoint["state_dict"], strict=True)
+
+
 
 
 def main(args):
@@ -571,12 +601,14 @@ def main(args):
     model = VAE_Model(args).to(args.device)
     model.load_checkpoint()
     if args.test:
+    
         model.eval()
     else:
         model.training_stage()
 
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3, help="init ial learning rate")
@@ -605,7 +637,7 @@ if __name__ == "__main__":
         "--num_workers", type=int, default=4, help="Number of workers for dataloader"
     )
     parser.add_argument(
-        "--num_epoch", type=int, default=75, help="number of total epoch"
+        "--num_epoch", type=int, default=200, help="number of total epoch"
     )
     parser.add_argument(
         "--per_save", type=int, default=3, help="Save checkpoint every seted epoch"
