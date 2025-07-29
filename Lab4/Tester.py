@@ -148,7 +148,6 @@ class Test_model(VAE_Model):
             z, _, _ = self.Gaussian_Predictor(frame_feat, label_feat)
             # Generate noises
             z = torch.randn_like(z)
-            
 
             out = self.Decoder_Fusion(frame_feat, label_feat, z)
             out = self.Generator(out)
@@ -211,7 +210,7 @@ class Test_model(VAE_Model):
 
     def load_checkpoint(self):
         if self.args.ckpt_path != None:
-            checkpoint = torch.load(self.args.ckpt_path)
+            checkpoint = torch.load(self.args.ckpt_path, weights_only=False)
             self.load_state_dict(checkpoint["state_dict"], strict=True)
 
 

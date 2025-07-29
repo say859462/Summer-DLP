@@ -143,7 +143,6 @@ class VAE_Model(nn.Module):
         self.optim = optim.AdamW(self.parameters(), lr=self.args.lr, weight_decay=5e-4)
         self.kl_annealing = kl_annealing(args, current_epoch=0)
 
-
         self.scheduler = optim.lr_scheduler.MultiStepLR(
             self.optim,
             milestones=[
@@ -151,24 +150,12 @@ class VAE_Model(nn.Module):
             ],
             gamma=0.1,
         )
-        # warmup_scheduler = optim.lr_scheduler.LinearLR(
-        #     self.optim, start_factor=0.01, end_factor=1.0, total_iters=5
-        # )
-        # cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        #     self.optim, T_max=args.num_epoch - 5, eta_min=1e-5
-        # )
-        # self.scheduler = optim.lr_scheduler.SequentialLR(
-        #     self.optim,
-        #     schedulers=[warmup_scheduler, cosine_scheduler],
-        #     milestones=[5],
-        # )
-
         self.scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(
             self.optim,
             mode="max",
             factor=0.5,
             patience=5,
-            min_lr=1e-5,
+            min_lr=1e-6,
         )
         self.mse_criterion = nn.MSELoss()
         self.current_epoch = 0
@@ -566,7 +553,11 @@ class VAE_Model(nn.Module):
             self.optim.load_state_dict(checkpoint["optimizer"])
 
             self.scheduler = optim.lr_scheduler.MultiStepLR(
-                self.optim, milestones=[2, ], gamma=0.1
+                self.optim,
+                milestones=[
+                    2,
+                ],
+                gamma=0.1,
             )
             self.scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optim,
@@ -591,8 +582,6 @@ class VAE_Model(nn.Module):
             self.load_state_dict(checkpoint["state_dict"], strict=True)
 
 
-
-
 def main(args):
 
     os.makedirs(args.save_root, exist_ok=True)
@@ -601,7 +590,7 @@ def main(args):
     model = VAE_Model(args).to(args.device)
     model.load_checkpoint()
     if args.test:
-    
+
         model.eval()
     else:
         model.training_stage()
@@ -610,7 +599,7 @@ def main(args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3, help="init ial learning rate")
     parser.add_argument("--device", type=str, choices=["cuda", "cpu"], default="cuda")
     parser.add_argument("--optim", type=str, choices=["Adam", "AdamW"], default="Adam")
@@ -637,7 +626,7 @@ if __name__ == "__main__":
         "--num_workers", type=int, default=4, help="Number of workers for dataloader"
     )
     parser.add_argument(
-        "--num_epoch", type=int, default=200, help="number of total epoch"
+        "--num_epoch", type=int, default=75, help="number of total epoch"
     )
     parser.add_argument(
         "--per_save", type=int, default=3, help="Save checkpoint every seted epoch"

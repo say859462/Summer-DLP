@@ -18,3 +18,6 @@ temp/
 LAB4_Dataset/
 saves/
 record.md
+plots/
+*.rar
+*.pdf
