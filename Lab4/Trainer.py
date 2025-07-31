@@ -181,7 +181,7 @@ class VAE_Model(nn.Module):
 
     def training_stage(self):
 
-        min_val_loss = torch.inf
+        min_val_loss = np.inf
         max_psnr = 0.0
 
         for i in range(self.args.num_epoch):
@@ -233,12 +233,13 @@ class VAE_Model(nn.Module):
 
             # We starting to save the model weight until over 10 epochs
             if (
-                val_loss <= min_val_loss
+                val_loss
+                <= min_val_loss * 1.1  # do not exceed the  10% of the minimum val loss
                 and avg_psnr >= max_psnr
                 and self.current_epoch >= 5
             ):
-                min_val_loss = val_loss
-                max_psnr = avg_psnr
+                min_val_loss = min(val_loss, min_val_loss)
+                max_psnr = max(avg_psnr, max_psnr)
                 self.save(
                     os.path.join(self.args.save_root, f"{self.model_prefix}.ckpt")
                 )
@@ -544,12 +545,14 @@ class VAE_Model(nn.Module):
 
     def load_checkpoint(self):
         if self.args.ckpt_path != None:
-            checkpoint = torch.load(self.args.ckpt_path)
+            checkpoint = torch.load(self.args.ckpt_path, weights_only=False)
             self.load_state_dict(checkpoint["state_dict"], strict=True)
             self.args.lr = checkpoint["lr"]
             self.tfr = checkpoint["tfr"]
 
-            self.optim = optim.Adam(self.parameters(), lr=self.args.lr)
+            self.optim = optim.Adam(
+                self.parameters(), lr=self.args.lr, weight_decay=5e-4
+            )
             self.optim.load_state_dict(checkpoint["optimizer"])
 
             self.scheduler = optim.lr_scheduler.MultiStepLR(
@@ -564,13 +567,22 @@ class VAE_Model(nn.Module):
                 mode="max",
                 factor=0.5,
                 patience=5,
-                min_lr=1e-5,
+                min_lr=1e-6,
             )
             self.kl_annealing = kl_annealing(
                 self.args, current_epoch=checkpoint["last_epoch"]
             )
             self.current_epoch = checkpoint["last_epoch"]
-            self.history = checkpoint["history"]
+
+            history = checkpoint["history"]
+            last_epoch = checkpoint["last_epoch"]
+            self.history = {
+                "train_loss": history["train_loss"][: last_epoch + 1],
+                "val_loss": history["val_loss"][: last_epoch + 1],
+                "psnr": history["psnr"][: last_epoch + 1],
+                "beta": history["beta"][: last_epoch + 1],
+                "tfr": history["tfr"][: last_epoch + 1],
+            }
 
     def optimizer_step(self):
         nn.utils.clip_grad_norm_(self.parameters(), 1.0)
@@ -585,8 +597,8 @@ class VAE_Model(nn.Module):
 def main(args):
 
     os.makedirs(args.save_root, exist_ok=True)
-    if args.ckpt_path is not None:
-        os.makedirs(args.ckpt_path, exist_ok=True)
+    # if args.ckpt_path is not None:
+    #     os.makedirs(args.ckpt_path, exist_ok=True)
     model = VAE_Model(args).to(args.device)
     model.load_checkpoint()
     if args.test:
@@ -626,7 +638,7 @@ if __name__ == "__main__":
         "--num_workers", type=int, default=4, help="Number of workers for dataloader"
     )
     parser.add_argument(
-        "--num_epoch", type=int, default=75, help="number of total epoch"
+        "--num_epoch", type=int, default=100, help="number of total epoch"
     )
     parser.add_argument(
         "--per_save", type=int, default=3, help="Save checkpoint every seted epoch"
