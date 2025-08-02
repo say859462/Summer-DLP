@@ -78,6 +78,8 @@ class DQN(nn.Module):
         ########## END OF YOUR CODE ##########
 
     def forward(self, x):
+        if x.dim() == 4:
+            x = x / 255.0  # Normalize the input for Atari games
         return self.network(x)
 
 
@@ -142,42 +144,36 @@ class PrioritizedReplayBuffer:
         return self.tree.n_entries
 
     def sample(self, batch_size):
-
+        
+        # Store the sample drawed from the replay memory
         b_idx = np.empty((batch_size,), dtype=np.int32)
         b_memory = []
         is_weights = np.empty((batch_size, 1), dtype=np.float32)
 
         priority_segment = self.tree.total_priority() / batch_size
 
-        # Calculate the minimum priority for normalization
-        min_prob = (
-            np.min(
-                self.tree.tree[
-                    self.tree.capacity
-                    - 1 : self.tree.capacity
-                    - 1
-                    + self.tree.n_entries
-                ]
-            )
-            / self.tree.total_priority
-        )
-
-        if min_prob == 0:
-            min_prob = 0.00001
+        
 
         for i in range(batch_size):
+            
+            # Sampling interval [a,b]
             a = priority_segment * i
             b = priority_segment * (i + 1)
+            
             v = np.random.uniform(a, b)
             idx, p, data = self.tree.get_leaf(v)
 
-            sampling_prob = p / self.tree.total_priority
+            # P(i)
+            sampling_prob = p / self.tree.total_priority()
 
             # calculate the importance sampling weight
-            is_weights[i, 0] = np.power(sampling_prob / min_prob, -self.beta)
+            # w = ( 1/  (N*P(I)) ) ^ beta
+            is_weights[i, 0] = np.power(self.tree.n_entries * sampling_prob, -self.beta)
             b_idx[i] = idx
             b_memory.append(data)
 
+        # Normalize the importance sampling weights
+        is_weights /= is_weights.max()
         return b_idx, b_memory, is_weights
 
     def update_priorities(self, tree_indices, abs_errors):
@@ -186,6 +182,7 @@ class PrioritizedReplayBuffer:
 
         for ti, p in zip(tree_indices, priorities):
             self.tree.update(ti, p)
+
 
 class DQNAgent:
     def __init__(self, env_name="CartPole-v1", args=None):
@@ -196,7 +193,7 @@ class DQNAgent:
         # There will be some differences on the environment settings for Atari games and CartPole
         self.num_actions = self.env.action_space.n
         self.env_name = env_name
-        
+
         if self.env_name == "ALE/Pong-v5":
             self.preprocessor = AtariPreprocessor()
 
@@ -210,22 +207,24 @@ class DQNAgent:
         self.target_net = DQN(self.num_actions, env_name).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.target_net.eval()  # Set the target network to evaluation mode
-        
-        # Parameter for Double DQN,PER,multi-step return 
+
+        # Parameter for Double DQN,PER,multi-step return
         self.use_ddqn = args.use_ddqn
         self.use_per = args.use_per
         self.n_steps = args.n_steps
-        
+
         if self.use_per:
             # Initialize the prioritized replay buffer
-            self.memory = PrioritizedReplayBuffer(capacity=args.memory_size, alpha=args.per_alpha, beta=args.per_beta)
+            self.memory = PrioritizedReplayBuffer(
+                capacity=args.memory_size, alpha=args.per_alpha, beta=args.per_beta
+            )
         else:
             self.memory = deque(maxlen=args.memory_size)
-        
+
         # For multi-step return, we need to keep a buffer of the last n steps
         if self.n_steps > 1:
             self.n_step_buffer = deque(maxlen=self.n_steps)
-        
+
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=args.lr)
 
         self.batch_size = args.batch_size
@@ -247,8 +246,10 @@ class DQNAgent:
         self.target_update_frequency = args.target_update_frequency
         self.train_per_step = args.train_per_step
         self.save_dir = args.save_dir
-        
-        print(f"Running with settings: DDQN={self.use_ddqn}, PER={self.use_per}, N-steps={self.n_steps}")
+
+        print(
+            f"Running with settings: DDQN={self.use_ddqn}, PER={self.use_per}, N-steps={self.n_steps}"
+        )
         if self.use_per:
             print(f"PER params: alpha={args.per_alpha}, beta={args.per_beta}")
         os.makedirs(self.save_dir, exist_ok=True)
@@ -270,14 +271,14 @@ class DQNAgent:
 
         # Select the action with the highest Q-value
         return q_values.argmax().item()
-    
-    
+
     def _get_n_step_info(self):
         # Get the n-step return information from the n-step buffer
         reward = 0
-        for i in range(len(self.n_step_buffer)): 
+        for i in range(len(self.n_step_buffer)):
             reward += (self.gamma**i) * self.n_step_buffer[i][2]
-        
+
+        # (s_t, a_t, R_t^{(n)}, s_{t+n}, done_{t+n})
         return (
             self.n_step_buffer[0][0],
             self.n_step_buffer[0][1],
@@ -285,7 +286,7 @@ class DQNAgent:
             self.n_step_buffer[-1][3],
             self.n_step_buffer[-1][4],
         )
-    
+
     def run(self, episodes=1000):
         # episode, just like playing the whole game
         for ep in range(episodes):
@@ -298,7 +299,7 @@ class DQNAgent:
 
             if self.n_steps > 1:
                 self.n_step_buffer.clear()
-            
+
             # Does the episode end flag
             done = False
             total_reward = 0
@@ -327,12 +328,15 @@ class DQNAgent:
 
                 # Take the next observation and preprocess it into the acceptable input of DQN
 
-                next_state = self.preprocessor.step(next_obs) if self.env_name == "ALE/Pong-v5" else next_obs
-
+                next_state = (
+                    self.preprocessor.step(next_obs)
+                    if self.env_name == "ALE/Pong-v5"
+                    else next_obs
+                )
 
                 # Store the transition in the replay memory
                 transition = (state, action, reward, next_state, done)
-                
+
                 if self.n_steps > 1:
                     self.n_step_buffer.append(transition)
                     if len(self.n_step_buffer) == self.n_steps:
@@ -342,17 +346,16 @@ class DQNAgent:
                             self.memory.add(n_step_transition, None)
                         else:
                             self.memory.append(n_step_transition)
-                else: # 1-step return
+                else:  # 1-step return
                     if self.use_per:
                         self.memory.add(transition, None)
                     else:
                         self.memory.append(transition)
-                    
-                
+
                 # Train the DQN network
                 for _ in range(self.train_per_step):
                     self.train()
-                    
+
                 if self.n_steps > 1 and done:
                     while len(self.n_step_buffer) > 0:
                         n_step_transition = self._get_n_step_info()
@@ -360,10 +363,9 @@ class DQNAgent:
                             self.memory.add(n_step_transition, None)
                         else:
                             self.memory.append(n_step_transition)
-                        
+
                         self.n_step_buffer.popleft()
-                        
-                
+
                 state = next_state
                 total_reward += reward
                 self.env_count += 1
@@ -462,7 +464,6 @@ class DQNAgent:
             self.epsilon *= self.epsilon_decay
         self.train_count += 1
 
-
         if self.use_per:
             tree_indices, mini_sample, is_weights = self.memory.sample(self.batch_size)
             states, actions, rewards, next_states, dones = zip(*mini_sample)
@@ -470,7 +471,6 @@ class DQNAgent:
         else:
             mini_sample = random.sample(self.memory, self.batch_size)
             states, actions, rewards, next_states, dones = zip(*mini_sample)
-
 
         # Convert the states, actions, rewards, next_states, and dones into torch tensors
         # NOTE: Enable this part after you finish the mini-batch sampling
@@ -494,27 +494,29 @@ class DQNAgent:
         # Implement the loss function of DQN and the gradient updates
 
         with torch.no_grad():
-            
+
             if self.use_ddqn:
                 # Select the actions for the next states using the main network
                 main_net_actions = self.q_net(next_states).argmax(1, keepdim=True)
                 # Use the target network to get the Q-values for the next states
-                next_q_values = self.target_net(next_states).gather(1, main_net_actions).squeeze(1)
-            else :
+                next_q_values = (
+                    self.target_net(next_states).gather(1, main_net_actions).squeeze(1)
+                )
+            else:
                 # Compute the target Q-values using the target network
                 next_q_values = self.target_net(next_states).max(1)[0]
 
         # if the games is done, the target Q-value is just the reward (there is no future reward)
         # if the game is not done, the target Q-value is the reward + discounted future
         # if n_steps > 1, we need to consider the n-step return (gamma^n)
-        
-        gamma = self.gamma ** self.n_steps
-        target_q_values = rewards + (1 - dones) * gamma* next_q_values
+
+        gamma = self.gamma**self.n_steps
+        target_q_values = rewards + (1 - dones) * gamma * next_q_values
 
         # Calculate dqn loss
         if self.use_per:
             td_errors = target_q_values - q_values
-            loss = (is_weights*(td_errors ** 2)).mean()
+            loss = (is_weights * (td_errors**2)).mean()
             abs_errors = td_errors.abs().detach().cpu().numpy()
             self.memory.update_priorities(tree_indices, abs_errors)
         else:
@@ -563,21 +565,27 @@ if __name__ == "__main__":
 
     # Enhancements Flags
     parser.add_argument("--use-ddqn", action="store_true", help="Use Double DQN (DDQN)")
-    parser.add_argument("--use-per", action="store_true", help="Use Prioritized Experience Replay (PER)")
+    parser.add_argument(
+        "--use-per", action="store_true", help="Use Prioritized Experience Replay (PER)"
+    )
     parser.add_argument("--n-steps", type=int, default=1, help="Use N-step return")
-    
+
     # PER Hyperparameters
     parser.add_argument("--per-alpha", type=float, default=0.6, help="Alpha for PER")
-    parser.add_argument("--per-beta", type=float, default=0.4, help="Beta for PER") 
+    parser.add_argument("--per-beta", type=float, default=0.4, help="Beta for PER")
     args = parser.parse_args()
 
     run_name = f"{args.env_name}"
-    if args.use_ddqn: run_name += "-DDQN"
-    if args.use_per: run_name += f"-PER(a={args.per_alpha},b={args.per_beta})"
-    if args.n_steps > 1: run_name += f"-{args.n_steps}steps"
-    if not (args.use_ddqn or args.use_per or args.n_steps > 1): run_name += "-Vanilla"
+    if args.use_ddqn:
+        run_name += "-DDQN"
+    if args.use_per:
+        run_name += f"-PER(a={args.per_alpha},b={args.per_beta})"
+    if args.n_steps > 1:
+        run_name += f"-{args.n_steps}steps"
+    if not (args.use_ddqn or args.use_per or args.n_steps > 1):
+        run_name += "-Vanilla"
     run_name += f"-lr{args.lr}-bs{args.batch_size}"
-    
+
     wandb.init(project=f"DLP-Lab5-DQN-{args.env_name}", name=run_name, save_code=True)
     agent = DQNAgent(args=args, env_name=args.env_name)
     agent.run()
