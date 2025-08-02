@@ -53,7 +53,13 @@ class kl_annealing:
 
         self.annealing_type = args.kl_anneal_type
 
-        assert self.annealing_type in ["Cyclical", "Monotonic", "Without", "Cosine"]
+        assert self.annealing_type in [
+            "Cyclical",
+            "Monotonic",
+            "Without",
+            "Cosine",
+            "Constant",
+        ]
 
         self.iter = current_epoch + 1
 
@@ -81,6 +87,8 @@ class kl_annealing:
                 n_cycle=args.kl_anneal_cycle,
                 ratio=args.kl_anneal_ratio,
             )
+        elif self.annealing_type == "Constant":
+            self.L = np.ones(args.num_epoch + 1) * 1e-4
         else:
             self.L = np.ones(args.num_epoch + 1)
 
@@ -140,7 +148,7 @@ class VAE_Model(nn.Module):
         self.Generator = Generator(input_nc=args.D_out_dim, output_nc=3)
 
         # Add weight decay to avoid overfitting and gradient explosion
-        self.optim = optim.AdamW(self.parameters(), lr=self.args.lr, weight_decay=5e-4)
+        self.optim = optim.AdamW(self.parameters(), lr=self.args.lr, weight_decay=1e-5)
         self.kl_annealing = kl_annealing(args, current_epoch=0)
 
         self.scheduler = optim.lr_scheduler.MultiStepLR(
@@ -155,7 +163,7 @@ class VAE_Model(nn.Module):
             mode="max",
             factor=0.5,
             patience=5,
-            min_lr=1e-6,
+            min_lr=1e-5,
         )
         self.mse_criterion = nn.MSELoss()
         self.current_epoch = 0
@@ -181,10 +189,10 @@ class VAE_Model(nn.Module):
 
     def training_stage(self):
 
-        min_val_loss = np.inf
-        max_psnr = 0.0
+        min_val_loss = 0.000399
+        max_psnr = 37.197720
 
-        for i in range(self.args.num_epoch):
+        for i in range(self.current_epoch, self.args.num_epoch):
             train_loader = self.train_dataloader()
             # tfr is the probability that should the model adapt teacher forcing technique
             adapt_TeacherForcing = True if random.random() < self.tfr else False
@@ -232,18 +240,21 @@ class VAE_Model(nn.Module):
             )
 
             # We starting to save the model weight until over 10 epochs
-            if (
-                val_loss
-                <= min_val_loss * 1.1  # do not exceed the  10% of the minimum val loss
-                and avg_psnr >= max_psnr
-                and self.current_epoch >= 5
-            ):
-                min_val_loss = min(val_loss, min_val_loss)
+            if avg_psnr > max_psnr and self.current_epoch >= 5:
                 max_psnr = max(avg_psnr, max_psnr)
                 self.save(
-                    os.path.join(self.args.save_root, f"{self.model_prefix}.ckpt")
+                    os.path.join(
+                        self.args.save_root, f"{self.model_prefix}_psnr_{max_psnr:.6f}.ckpt"
+                    )
                 )
-
+            if val_loss < min_val_loss and self.current_epoch >= 5:
+                min_val_loss = min(val_loss, min_val_loss)
+                self.save(
+                    os.path.join(
+                        self.args.save_root,
+                        f"{self.model_prefix}_val_loss_{min_val_loss:.6f}.ckpt",
+                    )
+                )
             # Save the history for plotting
             self.history["train_loss"].append(loss.item())
             self.history["val_loss"].append(val_loss)
@@ -257,7 +268,7 @@ class VAE_Model(nn.Module):
 
             self.current_epoch += 1
             # update learning rate based on avg psnr
-            self.scheduler.step()
+            # self.scheduler.step()
             self.scheduler2.step(avg_psnr)
 
             # update kl annealing and teacher forcing ratio
@@ -545,15 +556,21 @@ class VAE_Model(nn.Module):
 
     def load_checkpoint(self):
         if self.args.ckpt_path != None:
+
             checkpoint = torch.load(self.args.ckpt_path, weights_only=False)
             self.load_state_dict(checkpoint["state_dict"], strict=True)
+
             self.args.lr = checkpoint["lr"]
+
             self.tfr = checkpoint["tfr"]
 
+            # 這裡將weight_dcay 調低以改善psnr提升 5e-4 -> 1e-5
             self.optim = optim.Adam(
-                self.parameters(), lr=self.args.lr, weight_decay=5e-4
+                self.parameters(), lr=self.args.lr, weight_decay=1e-5
             )
+
             self.optim.load_state_dict(checkpoint["optimizer"])
+
 
             self.scheduler = optim.lr_scheduler.MultiStepLR(
                 self.optim,
@@ -720,7 +737,7 @@ if __name__ == "__main__":
         "--kl_anneal_type",
         type=str,
         default="Cyclical",
-        choices=["Cyclical", "Monotonic", "Without", "Cosine"],
+        choices=["Cyclical", "Monotonic", "Without", "Cosine", "Constant"],
         help="",
     )
     parser.add_argument("--kl_anneal_cycle", type=int, default=10, help="")
